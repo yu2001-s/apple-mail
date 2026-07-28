@@ -1,0 +1,44 @@
+{
+  "name": "apple-mail",
+  "version": "0.1.0",
+  "description": "Gmail-like draft management, scheduled sends, and sending identity control for Apple Mail on macOS.",
+  "author": {
+    "name": "Apple Mail contributors"
+  },
+  "homepage": "https://github.com/yu2001-s/apple-mail#readme",
+  "repository": "https://github.com/yu2001-s/apple-mail",
+  "license": "MIT",
+  "keywords": [
+    "apple-mail",
+    "email",
+    "drafts",
+    "scheduled-sends",
+    "sending-identities",
+    "mcp",
+    "codex",
+    "macos"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Apple Mail",
+    "shortDescription": "Gmail-like drafts, scheduled sends, and sender identities.",
+    "longDescription": "Manage Apple Mail with stable draft IDs, persistent future send schedules, in-place draft updates, explicit sending identities and aliases, and confirmation-gated sending and deletion.",
+    "developerName": "Apple Mail contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "MCP Servers",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/yu2001-s/apple-mail#readme",
+    "defaultPrompt": [
+      "List my Apple Mail drafts and verify their From identities.",
+      "Schedule these reviewed Apple Mail drafts for tomorrow morning.",
+      "Show every sending identity configured in Apple Mail."
+    ],
+    "brandColor": "#4F98DA",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  }
+}

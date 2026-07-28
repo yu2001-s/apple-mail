@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "apple-mail": {
+      "command": "node",
+      "args": ["./server/index.js"],
+      "cwd": "."
+    }
+  }
+}

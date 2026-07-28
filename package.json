@@ -1,0 +1,104 @@
+{
+  "name": "apple-mail-mcp",
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.9.0",
+  "description": "Gmail-like Apple Mail MCP server with stable drafts, scheduled sends, and sending identity control",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "apple-mail-mcp": "build/index.js",
+    "apple-mail-send": "build/cli.js"
+  },
+  "files": [
+    "build",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "preinstall": "node -e \"const fs=require('fs');const ua=process.env.npm_config_user_agent||'';if(fs.existsSync('.git')&&!ua.startsWith('pnpm')){console.error('\\nThis repo uses pnpm. npm/yarn resolve dependencies off-lockfile and the committed bundle will mismatch CI.\\n\\n  corepack enable && pnpm install --frozen-lockfile\\n');process.exit(1)}\"",
+    "build": "tsc --noEmit && esbuild src/index.ts src/cli.ts src/schedulerCli.ts --bundle --platform=node --format=esm --target=node20 --outdir=build --banner:js=\"import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);\"",
+    "build:plugin": "pnpm build && node scripts/build-codex-plugin.mjs",
+    "start": "node build/index.js",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:imap": "vitest run --config vitest.imap.config.ts",
+    "test:all": "vitest run && vitest run --config vitest.integration.config.ts",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "format": "prettier --write src",
+    "format:check": "prettier --check src",
+    "typecheck": "tsc --noEmit",
+    "sync:skills": "node scripts/sync-skills.mjs",
+    "version": "node scripts/sync-plugin-version.mjs && git add .agents/plugins codex",
+    "prepublishOnly": "pnpm run lint && pnpm test && pnpm run build",
+    "prepare": "husky; pnpm run build"
+  },
+  "keywords": [
+    "mcp",
+    "apple-mail",
+    "claude",
+    "codex",
+    "ai",
+    "applescript",
+    "macos",
+    "email",
+    "model-context-protocol"
+  ],
+  "author": "Apple Mail contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yu2001-s/apple-mail.git"
+  },
+  "homepage": "https://github.com/yu2001-s/apple-mail#readme",
+  "bugs": {
+    "url": "https://github.com/yu2001-s/apple-mail/issues"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "os": [
+    "darwin"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "imapflow": "^1.4.1",
+    "nodemailer": "^9.0.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^20.0.0",
+    "@types/nodemailer": "^8.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.0.0",
+    "globals": "^17.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.0.0",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.0.0",
+    "typescript-eslint": "^8.51.0",
+    "vitest": "^4.1.9"
+  },
+  "volta": {
+    "node": "24.17.0"
+  },
+  "lint-staged": {
+    "src/**/*.ts": [
+      "eslint --fix",
+      "prettier --write"
+    ]
+  },
+  "overrides": {
+    "js-yaml": "^4.2.0",
+    "postcss": "^8.5.15"
+  }
+}

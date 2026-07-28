@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "apple-mail": {
+      "command": "node",
+      "args": ["build/index.js"]
+    }
+  }
+}

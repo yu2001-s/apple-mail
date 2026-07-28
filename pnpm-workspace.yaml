@@ -1,0 +1,25 @@
+# Single-package repo (no workspace packages). This file records pnpm's
+# build-script approvals, which pnpm 11 reads only from here (the package.json
+# "pnpm" field and .npmrc are no longer read, and the v10 onlyBuiltDependencies
+# array was replaced by the allowBuilds map).
+#
+# This repo's dev toolchain (vitest 4 → rolldown, which ships prebuilt platform
+# binaries) currently triggers no postinstall build scripts, so no approval is
+# strictly required today. The esbuild entry is kept for parity with the sibling
+# repos and as a guard: if a future dev dep pulls esbuild back in (it ships a
+# postinstall), this pre-approves it so `pnpm install` won't fail with
+# ERR_PNPM_IGNORED_BUILDS. Add any package pnpm later reports under "Ignored
+# build scripts:" here.
+allowBuilds:
+  esbuild: true
+
+# Pin pnpm 11's supply-chain minimum-release-age default explicitly (1440 min = 1 day)
+# so it is documented and stable across pnpm upgrades. See https://pnpm.io/supply-chain-security.
+minimumReleaseAge: 1440
+
+# The MCP SDK currently caps these transitive dependencies below their first
+# fully patched releases. Keep the overrides until the SDK's ranges move past
+# these security fixes.
+overrides:
+  "@hono/node-server": 2.0.10
+  fast-uri: 3.1.4
