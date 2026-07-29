@@ -11906,7 +11906,11 @@ var SMTP_ENV = {
   allowedFrom: "APPLE_MAIL_MCP_SMTP_ALLOWED_FROM",
   password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
-  keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT"
+  keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
+  // JSON array of additional transport profiles. Each entry supports:
+  // account, host, port, secure, user, from, allowedFrom, password,
+  // keychainService, and keychainAccount.
+  accounts: "APPLE_MAIL_MCP_SMTP_ACCOUNTS"
 };
 function readKeychainPassword(service, account) {
   for (const kind of ["find-internet-password", "find-generic-password"]) {
@@ -12014,9 +12018,11 @@ async function sendViaSmtp(opts, config, createTransport = import_nodemailer.def
     });
     return { success: true, messageId: info.messageId };
   } catch (error) {
+    const responseCode = typeof error === "object" && error !== null && typeof error.responseCode === "number" ? error.responseCode : void 0;
     return {
       success: false,
-      error: `SMTP send failed: ${error instanceof Error ? error.message : String(error)}`
+      error: `SMTP send failed: ${error instanceof Error ? error.message : String(error)}`,
+      uncertain: responseCode === void 0
     };
   } finally {
     transporter.close();

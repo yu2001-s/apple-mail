@@ -9,6 +9,8 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   resolveSmtpConfig,
+  resolveSmtpConfigForIdentity,
+  sendRawViaSmtp,
   sendViaSmtp,
   sendSerialViaSmtp,
   applyPlaceholders,
@@ -109,6 +111,60 @@ describe("isSmtpConfigured", () => {
   it("is false for empty/whitespace values", () => {
     expect(isSmtpConfigured({ [SMTP_ENV.host]: "  ", [SMTP_ENV.user]: "  " })).toBe(false);
     expect(isSmtpConfigured({})).toBe(false);
+  });
+
+  it("recognizes JSON multi-account profiles", () => {
+    expect(
+      isSmtpConfigured({
+        [SMTP_ENV.accounts]: JSON.stringify([
+          { account: "Work", host: "smtp.work.test", user: "me@work.test" },
+        ]),
+      })
+    ).toBe(true);
+  });
+});
+
+describe("resolveSmtpConfigForIdentity", () => {
+  const multiEnv = {
+    [SMTP_ENV.accounts]: JSON.stringify([
+      {
+        account: "Personal",
+        host: "smtp.personal.test",
+        user: "me@personal.test",
+        password: "personal-secret",
+      },
+      {
+        account: "Work",
+        host: "smtp.work.test",
+        user: "me@work.test",
+        from: "me@work.test",
+        allowedFrom: ["alias@work.test"],
+        password: "work-secret",
+      },
+    ]),
+  } as NodeJS.ProcessEnv;
+
+  it("maps an alias to its authorized account transport", () => {
+    const config = resolveSmtpConfigForIdentity(
+      { email: "alias@work.test", account: "Work" },
+      multiEnv
+    );
+    expect(config).toMatchObject({
+      host: "smtp.work.test",
+      user: "me@work.test",
+      from: "me@work.test",
+      allowedFrom: ["alias@work.test"],
+    });
+  });
+
+  it("rejects an address not authorized by any profile", () => {
+    expect(() => resolveSmtpConfigForIdentity({ email: "spoof@elsewhere.test" }, multiEnv)).toThrow(
+      /No SMTP transport profile authorizes From/
+    );
+  });
+
+  it("rejects an ambiguous default when several profiles exist", () => {
+    expect(() => resolveSmtpConfigForIdentity({}, multiEnv)).toThrow(/ambiguous/i);
   });
 });
 
@@ -315,6 +371,64 @@ describe("sendViaSmtp", () => {
   });
 });
 
+describe("sendRawViaSmtp", () => {
+  it("submits the exact raw message with a separate Bcc-capable envelope", async () => {
+    const sendMail = vi.fn().mockResolvedValue({ messageId: "<raw@example.com>" });
+    const close = vi.fn();
+    const createTransport = vi.fn().mockReturnValue({ sendMail, close });
+    const raw = Buffer.from("From: alice@example.com\r\n\r\nExact");
+
+    const result = await sendRawViaSmtp(
+      raw,
+      {
+        from: "Alice <alice@example.com>",
+        to: ["visible@example.com", "hidden@example.com"],
+      },
+      testConfig,
+      createTransport as never
+    );
+
+    expect(result).toMatchObject({ success: true, messageId: "<raw@example.com>" });
+    expect(sendMail).toHaveBeenCalledWith({
+      envelope: {
+        from: "alice@example.com",
+        to: ["visible@example.com", "hidden@example.com"],
+      },
+      raw,
+    });
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("marks connection failures as uncertain but SMTP rejections as definite", async () => {
+    const uncertainTransport = vi.fn().mockReturnValue({
+      sendMail: vi.fn().mockRejectedValue(new Error("socket closed")),
+      close: vi.fn(),
+    });
+    expect(
+      await sendRawViaSmtp(
+        Buffer.from("x"),
+        { from: "alice@example.com", to: ["to@example.com"] },
+        testConfig,
+        uncertainTransport as never
+      )
+    ).toMatchObject({ success: false, uncertain: true });
+
+    const rejection = Object.assign(new Error("rejected"), { responseCode: 550 });
+    const rejectedTransport = vi.fn().mockReturnValue({
+      sendMail: vi.fn().mockRejectedValue(rejection),
+      close: vi.fn(),
+    });
+    expect(
+      await sendRawViaSmtp(
+        Buffer.from("x"),
+        { from: "alice@example.com", to: ["to@example.com"] },
+        testConfig,
+        rejectedTransport as never
+      )
+    ).toMatchObject({ success: false, uncertain: false });
+  });
+});
+
 describe("sendViaSmtp threading headers (2.5.0)", () => {
   it("passes inReplyTo and references through to nodemailer", async () => {
     const sendMail = vi.fn().mockResolvedValue({ messageId: "<new@host>" });
@@ -400,5 +514,15 @@ describe("sendSerialViaSmtp", () => {
       { delayMs: 0, send: send as never, sleep }
     );
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("uses one explicitly selected From identity for every personalized message", async () => {
+    const send = vi.fn(async () => ({ success: true, messageId: "<ok>" }));
+    await sendSerialViaSmtp([{ email: "a@x.com", variables: {} }], "s", "b", testConfig, {
+      from: "alias@example.com",
+      delayMs: 0,
+      send: send as never,
+    });
+    expect(send.mock.calls[0][0].from).toBe("alias@example.com");
   });
 });

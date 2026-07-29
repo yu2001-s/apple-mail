@@ -40,7 +40,7 @@ function extractBoundary(source: string): string | null {
  * Extract a header value from a MIME part header block.
  * Handles folded headers (continuation lines starting with whitespace).
  */
-function getHeader(headers: string, name: string): string | null {
+export function getMimeHeader(headers: string, name: string): string | null {
   const regex = new RegExp(`^${name}:\\s*(.+(?:\\r?\\n[ \\t]+.+)*)`, "im");
   const match = headers.match(regex);
   if (!match) return null;
@@ -53,13 +53,13 @@ function getHeader(headers: string, name: string): string | null {
  */
 function extractFilename(headers: string): string | null {
   // Try Content-Disposition filename first
-  const dispHeader = getHeader(headers, "Content-Disposition");
+  const dispHeader = getMimeHeader(headers, "Content-Disposition");
   if (dispHeader) {
     const fnMatch = dispHeader.match(/filename="?([^";\r\n]+)"?/i);
     if (fnMatch) return fnMatch[1].trim();
   }
   // Fall back to Content-Type name parameter
-  const ctHeader = getHeader(headers, "Content-Type");
+  const ctHeader = getMimeHeader(headers, "Content-Type");
   if (ctHeader) {
     const nameMatch = ctHeader.match(/name="?([^";\r\n]+)"?/i);
     if (nameMatch) return nameMatch[1].trim();
@@ -71,7 +71,7 @@ function extractFilename(headers: string): string | null {
  * Check if a MIME part has inline disposition (not a real attachment).
  */
 function isInlineDisposition(headers: string): boolean {
-  const dispHeader = getHeader(headers, "Content-Disposition");
+  const dispHeader = getMimeHeader(headers, "Content-Disposition");
   if (!dispHeader) return false;
   return dispHeader.toLowerCase().startsWith("inline");
 }
@@ -80,7 +80,7 @@ function isInlineDisposition(headers: string): boolean {
  * Extract size from Content-Disposition size parameter.
  */
 function extractSize(headers: string): number {
-  const dispHeader = getHeader(headers, "Content-Disposition");
+  const dispHeader = getMimeHeader(headers, "Content-Disposition");
   if (dispHeader) {
     const sizeMatch = dispHeader.match(/size=(\d+)/i);
     if (sizeMatch) return parseInt(sizeMatch[1], 10);
@@ -92,7 +92,7 @@ function extractSize(headers: string): number {
  * Extract MIME type from Content-Type header.
  */
 function extractMimeType(headers: string): string {
-  const ctHeader = getHeader(headers, "Content-Type");
+  const ctHeader = getMimeHeader(headers, "Content-Type");
   if (!ctHeader) return "application/octet-stream";
   const typeMatch = ctHeader.match(/^([^;\s]+)/);
   return typeMatch ? typeMatch[1].toLowerCase() : "application/octet-stream";
@@ -154,7 +154,7 @@ function walkLeafParts(source: string, boundary: string, depth = 0): MimePart[] 
   const parts = splitMimeParts(source, boundary);
 
   for (const part of parts) {
-    const ct = getHeader(part.headers, "Content-Type");
+    const ct = getMimeHeader(part.headers, "Content-Type");
     if (ct && /^multipart\//i.test(ct) && depth < MAX_MIME_DEPTH) {
       const nestedBoundary = extractBoundary(ct);
       if (nestedBoundary) {
@@ -240,7 +240,7 @@ export function parseMimeAttachments(source: string): MimeAttachmentInfo[] {
 
     if (isInlineDisposition(part.headers)) continue;
 
-    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    const encoding = getMimeHeader(part.headers, "Content-Transfer-Encoding");
 
     attachments.push({
       name: filename,
@@ -249,6 +249,33 @@ export function parseMimeAttachments(source: string): MimeAttachmentInfo[] {
     });
   }
 
+  return attachments;
+}
+
+/**
+ * Decode every non-inline file attachment in source order.
+ *
+ * Unlike extractMimeAttachment(), this preserves duplicate filenames and is
+ * therefore safe for a draft-edit round trip.
+ */
+export function parseMimeAttachmentData(source: string): MimeAttachmentData[] {
+  if (!source || !source.trim()) return [];
+  const boundary = extractBoundary(source);
+  if (!boundary) return [];
+
+  const attachments: MimeAttachmentData[] = [];
+  for (const part of walkLeafParts(source, boundary)) {
+    const name = extractFilename(part.headers);
+    if (!name || isInlineDisposition(part.headers)) continue;
+    const encoding = getMimeHeader(part.headers, "Content-Transfer-Encoding");
+    const data = decodeBody(part.body, encoding);
+    attachments.push({
+      name,
+      mimeType: extractMimeType(part.headers),
+      size: data.length,
+      data,
+    });
+  }
   return attachments;
 }
 
@@ -274,7 +301,7 @@ export function extractHtmlBody(source: string): string | null {
   if (boundary) {
     for (const part of walkLeafParts(source, boundary)) {
       if (extractMimeType(part.headers) === "text/html") {
-        const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+        const encoding = getMimeHeader(part.headers, "Content-Transfer-Encoding");
         return decodeBody(part.body, encoding).toString("utf8");
       }
     }
@@ -287,7 +314,7 @@ export function extractHtmlBody(source: string): string | null {
   const headers = source.substring(0, blankLineIdx);
   if (extractMimeType(headers) !== "text/html") return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  const encoding = getMimeHeader(headers, "Content-Transfer-Encoding");
   return decodeBody(body, encoding).toString("utf8");
 }
 
@@ -303,7 +330,7 @@ export function extractTextBody(source: string): string | null {
   if (boundary) {
     for (const part of walkLeafParts(source, boundary)) {
       if (extractMimeType(part.headers) === "text/plain") {
-        const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+        const encoding = getMimeHeader(part.headers, "Content-Transfer-Encoding");
         return decodeBody(part.body, encoding).toString("utf8");
       }
     }
@@ -315,9 +342,9 @@ export function extractTextBody(source: string): string | null {
   if (blankLineIdx === -1) return null;
   const headers = source.substring(0, blankLineIdx);
   const ct = extractMimeType(headers);
-  if (ct !== "text/plain" && getHeader(headers, "Content-Type") !== null) return null;
+  if (ct !== "text/plain" && getMimeHeader(headers, "Content-Type") !== null) return null;
   const body = source.substring(blankLineIdx).replace(/^\r?\n\r?\n/, "");
-  const encoding = getHeader(headers, "Content-Transfer-Encoding");
+  const encoding = getMimeHeader(headers, "Content-Transfer-Encoding");
   return decodeBody(body, encoding).toString("utf8");
 }
 
@@ -335,7 +362,7 @@ export function extractRfcMessageIdFromSource(source: string): string {
   if (!source || !source.trim()) return "";
   const blankLineIdx = source.search(/\r?\n\r?\n/);
   const headers = blankLineIdx === -1 ? source : source.substring(0, blankLineIdx);
-  const raw = getHeader(headers, "Message-ID") ?? getHeader(headers, "Message-Id");
+  const raw = getMimeHeader(headers, "Message-ID") ?? getMimeHeader(headers, "Message-Id");
   if (!raw) return "";
   return raw.trim().replace(/^<+/, "").replace(/>+$/, "").trim();
 }
@@ -364,7 +391,7 @@ export function extractMimeAttachment(
     const filename = extractFilename(part.headers);
     if (filename !== attachmentName) continue;
 
-    const encoding = getHeader(part.headers, "Content-Transfer-Encoding");
+    const encoding = getMimeHeader(part.headers, "Content-Transfer-Encoding");
     const data = decodeBody(part.body, encoding);
 
     return {

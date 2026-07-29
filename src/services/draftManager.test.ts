@@ -179,6 +179,59 @@ describe("DraftManager stable draft ids", () => {
     expect(second.drafts?.[0].nativeId).toBe("19");
   });
 
+  it("keeps the same draft id but changes revision after an external Mail edit", () => {
+    const registryPath = tempRegistry();
+    let body = "Before";
+    const execute = (): AppleScriptResult => ({
+      success: true,
+      output: row({
+        id: "55902",
+        sourceKind: "mailbox",
+        accountId: "account-1",
+        accountName: "iCloud",
+        mailboxName: "Drafts",
+        messageId: "same-message@example.com",
+        body,
+      }),
+    });
+    const manager = new DraftManager({ registryPath, execute });
+    const first = manager.listDrafts().drafts?.[0];
+    body = "Edited on iPhone";
+    const second = manager.listDrafts().drafts?.[0];
+
+    expect(second?.draftId).toBe(first?.draftId);
+    expect(second?.revision).not.toBe(first?.revision);
+  });
+
+  it("rejects an update when the reviewed revision is stale", () => {
+    const registryPath = tempRegistry();
+    let body = "Before";
+    const execute = (): AppleScriptResult => ({
+      success: true,
+      output: row({
+        id: "55902",
+        sourceKind: "mailbox",
+        accountId: "account-1",
+        accountName: "iCloud",
+        mailboxName: "Drafts",
+        messageId: "same-message@example.com",
+        body,
+      }),
+    });
+    const manager = new DraftManager({ registryPath, execute });
+    const reviewed = manager.listDrafts().drafts?.[0];
+    body = "Edited elsewhere";
+
+    const updated = manager.updateDraft(reviewed?.draftId as string, {
+      expectedRevision: reviewed?.revision,
+      subject: "Should not overwrite",
+    });
+
+    expect(updated.success).toBe(false);
+    expect(updated.error).toMatch(/Draft conflict/);
+    expect(updated.error).toContain("Read the draft again");
+  });
+
   it("returns the same stable draft id after an in-place update", () => {
     const registryPath = tempRegistry();
     const current = row({ id: "7", subject: "Before", body: "Old" });

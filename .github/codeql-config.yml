@@ -1,0 +1,9 @@
+name: Apple Mail source
+
+paths:
+  - src
+  - scripts
+
+paths-ignore:
+  - build
+  - codex/server

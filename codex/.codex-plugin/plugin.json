@@ -1,7 +1,7 @@
 {
   "name": "apple-mail",
-  "version": "0.1.0",
-  "description": "Gmail-like draft management, scheduled sends, and sending identity control for Apple Mail on macOS.",
+  "version": "0.3.0",
+  "description": "Gmail-like synchronized MIME drafts, robust read/edit/send, scheduled sends, and sending identity control for Apple Mail.",
   "author": {
     "name": "Apple Mail contributors"
   },
@@ -22,8 +22,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Apple Mail",
-    "shortDescription": "Gmail-like drafts, scheduled sends, and sender identities.",
-    "longDescription": "Manage Apple Mail with stable draft IDs, persistent future send schedules, in-place draft updates, explicit sending identities and aliases, and confirmation-gated sending and deletion.",
+    "shortDescription": "Synced drafts, robust editing, scheduling, and sender identities.",
+    "longDescription": "Manage Apple Mail with server-synchronized MIME drafts, stable revisions, HTML and attachment editing, exact sending identities, Sent reconciliation, and confirmation-gated immediate or scheduled sending.",
     "developerName": "Apple Mail contributors",
     "category": "Productivity",
     "capabilities": [

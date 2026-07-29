@@ -3,7 +3,6 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Draft } from "@/types.js";
-import type { DraftManager } from "@/services/draftManager.js";
 import {
   buildScheduledSendLaunchAgentPlist,
   ensureScheduledSendLaunchAgent,
@@ -26,6 +25,7 @@ afterEach(() => {
 function draft(overrides: Partial<Draft> = {}): Draft {
   return {
     draftId: "apple-draft:00000000-0000-4000-8000-000000000001",
+    revision: "reviewed-revision",
     nativeId: "55902",
     from: "Tester <test@example.com>",
     to: ["to@example.com"],
@@ -46,20 +46,20 @@ function draft(overrides: Partial<Draft> = {}): Draft {
 
 function fakeDraftManager(initialDrafts: Draft[]) {
   const byId = new Map(initialDrafts.map((item) => [item.draftId, item]));
-  const sendDraft = vi.fn((draftId: string) => {
+  const sendDraft = vi.fn(async (draftId: string) => {
     const item = byId.get(draftId);
     return item ? { success: true, draft: item } : { success: false, error: "not found" };
   });
   return {
     manager: {
-      getDraft: (draftId: string) => {
+      getDraft: async (draftId: string) => {
         const item = byId.get(draftId);
         return item
           ? { success: true, draft: item }
           : { success: false, error: `Draft "${draftId}" was not found.` };
       },
       sendDraft,
-    } as unknown as DraftManager,
+    },
     byId,
     sendDraft,
   };
@@ -87,7 +87,7 @@ describe("scheduled time validation", () => {
 });
 
 describe("ScheduledSendManager", () => {
-  it("atomically schedules a reviewed batch and installs the worker once", () => {
+  it("atomically schedules a reviewed batch and installs the worker once", async () => {
     const one = draft();
     const two = draft({
       draftId: "apple-draft:00000000-0000-4000-8000-000000000002",
@@ -104,7 +104,10 @@ describe("ScheduledSendManager", () => {
       ensureWorker,
     });
 
-    const result = manager.scheduleDrafts([one.draftId, two.draftId], "2026-07-29T07:00:00+08:00");
+    const result = await manager.scheduleDrafts(
+      [one.draftId, two.draftId],
+      "2026-07-29T07:00:00+08:00"
+    );
 
     expect(result.success).toBe(true);
     expect(result.schedules).toHaveLength(2);
@@ -114,7 +117,7 @@ describe("ScheduledSendManager", () => {
     expect(manager.activeForDraft(one.draftId)?.snapshot.subject).toBe("Reviewed");
   });
 
-  it("writes nothing when one draft is missing or the worker cannot install", () => {
+  it("writes nothing when one draft is missing or the worker cannot install", async () => {
     const one = draft();
     const registryPath = tempPath();
     const fake = fakeDraftManager([one]);
@@ -125,14 +128,14 @@ describe("ScheduledSendManager", () => {
       ensureWorker: () => ({ success: false, error: "launchd unavailable" }),
     });
 
-    const missing = manager.scheduleDrafts(
+    const missing = await manager.scheduleDrafts(
       [one.draftId, "apple-draft:00000000-0000-4000-8000-000000000099"],
       "2026-07-29T07:00:00+08:00"
     );
     expect(missing.success).toBe(false);
     expect(manager.list()).toEqual([]);
 
-    const workerFailure = manager.scheduleDrafts([one.draftId], "2026-07-29T07:00:00+08:00");
+    const workerFailure = await manager.scheduleDrafts([one.draftId], "2026-07-29T07:00:00+08:00");
     expect(workerFailure).toMatchObject({ success: false, error: "launchd unavailable" });
     expect(manager.list()).toEqual([]);
   });
@@ -145,7 +148,7 @@ describe("ScheduledSendManager", () => {
     expect(() => manager.list()).toThrow(/registry is unreadable/i);
   });
 
-  it("refuses attached drafts instead of risking attachment loss", () => {
+  it("refuses attached legacy drafts instead of risking attachment loss", async () => {
     const attached = draft({ hasAttachments: true });
     const fake = fakeDraftManager([attached]);
     const manager = new ScheduledSendManager({
@@ -154,12 +157,30 @@ describe("ScheduledSendManager", () => {
       now: () => new Date("2026-07-28T22:00:00.000Z"),
     });
 
-    expect(manager.scheduleDrafts([attached.draftId], "2026-07-29T07:00:00+08:00")).toMatchObject({
-      success: false,
-    });
+    expect(
+      await manager.scheduleDrafts([attached.draftId], "2026-07-29T07:00:00+08:00")
+    ).toMatchObject({ success: false });
   });
 
-  it("sends an overdue unchanged draft exactly once", () => {
+  it("schedules attached IMAP drafts because exact MIME is preserved", async () => {
+    const attached = draft({
+      hasAttachments: true,
+      backend: "imap",
+      sourceKind: "imap",
+    });
+    const fake = fakeDraftManager([attached]);
+    const manager = new ScheduledSendManager({
+      registryPath: tempPath(),
+      draftManager: fake.manager,
+      now: () => new Date("2026-07-28T22:00:00.000Z"),
+    });
+
+    expect(
+      await manager.scheduleDrafts([attached.draftId], "2026-07-29T07:00:00+08:00")
+    ).toMatchObject({ success: true });
+  });
+
+  it("sends an overdue unchanged draft exactly once", async () => {
     const reviewed = draft();
     const fake = fakeDraftManager([reviewed]);
     let now = new Date("2026-07-28T22:00:00.000Z");
@@ -169,17 +190,17 @@ describe("ScheduledSendManager", () => {
       now: () => now,
       ensureWorker: () => ({ success: true }),
     });
-    manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
+    await manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
 
-    expect(manager.runDueSends()).toEqual([]);
+    expect(await manager.runDueSends()).toEqual([]);
     now = new Date("2026-07-29T03:00:00.000Z"); // Simulates wake several hours late.
-    expect(manager.runDueSends()).toEqual([expect.objectContaining({ status: "sent" })]);
-    expect(manager.runDueSends()).toEqual([]);
+    expect(await manager.runDueSends()).toEqual([expect.objectContaining({ status: "sent" })]);
+    expect(await manager.runDueSends()).toEqual([]);
     expect(fake.sendDraft).toHaveBeenCalledTimes(1);
     expect(manager.list()[0]).toMatchObject({ status: "sent" });
   });
 
-  it("fails safely without sending when reviewed content changed", () => {
+  it("fails safely without sending when reviewed content changed", async () => {
     const reviewed = draft();
     const fake = fakeDraftManager([reviewed]);
     let now = new Date("2026-07-28T22:00:00.000Z");
@@ -189,18 +210,22 @@ describe("ScheduledSendManager", () => {
       now: () => now,
       ensureWorker: () => ({ success: true }),
     });
-    manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
-    fake.byId.set(reviewed.draftId, { ...reviewed, body: "Changed after review" });
+    await manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
+    fake.byId.set(reviewed.draftId, {
+      ...reviewed,
+      body: "Changed after review",
+      revision: "changed-revision",
+    });
     now = new Date("2026-07-28T23:00:01.000Z");
 
-    const result = manager.runDueSends();
+    const result = await manager.runDueSends();
 
     expect(result[0]).toMatchObject({ status: "failed" });
     expect(result[0].error).toMatch(/changed after scheduling/i);
     expect(fake.sendDraft).not.toHaveBeenCalled();
   });
 
-  it("supports rescheduling and cancellation only while pending", () => {
+  it("supports rescheduling and cancellation only while pending", async () => {
     const reviewed = draft();
     const fake = fakeDraftManager([reviewed]);
     const manager = new ScheduledSendManager({
@@ -209,7 +234,7 @@ describe("ScheduledSendManager", () => {
       now: () => new Date("2026-07-28T22:00:00.000Z"),
       ensureWorker: () => ({ success: true }),
     });
-    const created = manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
+    const created = await manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
     const scheduleId = created.schedules?.[0].scheduleId as string;
 
     expect(
@@ -219,7 +244,7 @@ describe("ScheduledSendManager", () => {
     expect(manager.reschedule(scheduleId, "2026-07-29T09:00:00+08:00").success).toBe(false);
   });
 
-  it("moves a stale sending claim to needs_review and never retries it", () => {
+  it("moves a stale sending claim to needs_review and never retries it", async () => {
     const reviewed = draft();
     const fake = fakeDraftManager([reviewed]);
     const registryPath = tempPath();
@@ -230,7 +255,7 @@ describe("ScheduledSendManager", () => {
       now: () => now,
       ensureWorker: () => ({ success: true }),
     });
-    manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
+    await manager.scheduleDrafts([reviewed.draftId], "2026-07-29T07:00:00+08:00");
     const stored = JSON.parse(readFileSync(registryPath, "utf8")) as {
       jobs: Record<string, { status: string; startedAt?: string }>;
     };
@@ -240,7 +265,7 @@ describe("ScheduledSendManager", () => {
     writeFileSync(registryPath, `${JSON.stringify(stored)}\n`);
     now = new Date("2026-07-28T22:10:00.000Z");
 
-    expect(manager.runDueSends()).toEqual([]);
+    expect(await manager.runDueSends()).toEqual([]);
     expect(manager.list()[0]).toMatchObject({ status: "needs_review" });
     expect(fake.sendDraft).not.toHaveBeenCalled();
   });

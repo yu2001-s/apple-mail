@@ -1,6 +1,6 @@
 {
   "name": "apple-mail-mcp",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "packageManager": "pnpm@11.9.0",
   "description": "Gmail-like Apple Mail MCP server with stable drafts, scheduled sends, and sending identity control",
   "type": "module",

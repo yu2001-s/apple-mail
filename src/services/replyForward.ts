@@ -26,6 +26,8 @@ export interface OriginalHeaders {
   to: string[];
   /** `Cc` address(es), bare. */
   cc: string[];
+  /** `Bcc` address(es), bare. Usually available only on sent/draft mail. */
+  bcc: string[];
   /** `Subject`, unfolded and trimmed (no `Re:`/`Fwd:` normalization). */
   subject: string;
   /** `Date` header verbatim, for the reply attribution line. */
@@ -86,6 +88,7 @@ export function parseOriginalHeaders(raw: string): OriginalHeaders {
     replyTo: extractAddresses(get("Reply-To") ?? ""),
     to: extractAddresses(get("To") ?? ""),
     cc: extractAddresses(get("Cc") ?? ""),
+    bcc: extractAddresses(get("Bcc") ?? ""),
     subject: get("Subject") ?? "",
     date: get("Date"),
   };
