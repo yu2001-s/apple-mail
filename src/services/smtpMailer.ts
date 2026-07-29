@@ -72,6 +72,16 @@ export interface SmtpSendResult {
   success: boolean;
   messageId?: string;
   error?: string;
+  /**
+   * True when the connection failed after submission may have started and the
+   * caller must not automatically retry.
+   */
+  uncertain?: boolean;
+}
+
+export interface RawSmtpEnvelope {
+  from: string;
+  to: string[];
 }
 
 /**
@@ -88,6 +98,10 @@ export const SMTP_ENV = {
   password: "APPLE_MAIL_MCP_SMTP_PASSWORD",
   keychainService: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE",
   keychainAccount: "APPLE_MAIL_MCP_SMTP_KEYCHAIN_ACCOUNT",
+  // JSON array of additional transport profiles. Each entry supports:
+  // account, host, port, secure, user, from, allowedFrom, password,
+  // keychainService, and keychainAccount.
+  accounts: "APPLE_MAIL_MCP_SMTP_ACCOUNTS",
 } as const;
 
 /**
@@ -99,7 +113,24 @@ export const SMTP_ENV = {
  * time via {@link resolveSmtpConfig}.
  */
 export function isSmtpConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim());
+  if (env[SMTP_ENV.host]?.trim() && env[SMTP_ENV.user]?.trim()) return true;
+  const json = env[SMTP_ENV.accounts]?.trim();
+  if (!json) return false;
+  try {
+    const profiles: unknown = JSON.parse(json);
+    return (
+      Array.isArray(profiles) &&
+      profiles.some(
+        (profile) =>
+          typeof profile === "object" &&
+          profile !== null &&
+          typeof (profile as Record<string, unknown>).host === "string" &&
+          typeof (profile as Record<string, unknown>).user === "string"
+      )
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -211,6 +242,154 @@ export function resolveSmtpConfig(env: NodeJS.ProcessEnv = process.env): SmtpCon
   return { host: host as string, port, secure, user: user as string, pass, from, allowedFrom };
 }
 
+interface SmtpProfileSpec {
+  account?: string;
+  host: string;
+  port?: number;
+  secure?: boolean;
+  user: string;
+  from?: string;
+  allowedFrom?: string[];
+  password?: string;
+  keychainService?: string;
+  keychainAccount?: string;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function smtpProfileSpecs(env: NodeJS.ProcessEnv): SmtpProfileSpec[] {
+  const specs: SmtpProfileSpec[] = [];
+  const legacyHost = optionalString(env[SMTP_ENV.host]);
+  const legacyUser = optionalString(env[SMTP_ENV.user]);
+  if (legacyHost && legacyUser) {
+    specs.push({
+      host: legacyHost,
+      port: env[SMTP_ENV.port] ? Number.parseInt(env[SMTP_ENV.port] as string, 10) : undefined,
+      secure: /^(1|true|yes)$/i.test(env[SMTP_ENV.secure]?.trim() ?? ""),
+      user: legacyUser,
+      from: optionalString(env[SMTP_ENV.from]),
+      allowedFrom: (env[SMTP_ENV.allowedFrom] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      password: env[SMTP_ENV.password],
+      keychainService: optionalString(env[SMTP_ENV.keychainService]),
+      keychainAccount: optionalString(env[SMTP_ENV.keychainAccount]),
+    });
+  }
+
+  const json = env[SMTP_ENV.accounts]?.trim();
+  if (!json) return specs;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error(`${SMTP_ENV.accounts} must be a valid JSON array.`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${SMTP_ENV.accounts} must be a JSON array.`);
+  }
+  for (const raw of parsed) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const profile = raw as Record<string, unknown>;
+    const host = optionalString(profile.host);
+    const user = optionalString(profile.user);
+    if (!host || !user) continue;
+    const allowedFrom = Array.isArray(profile.allowedFrom)
+      ? profile.allowedFrom.map(optionalString).filter((value): value is string => Boolean(value))
+      : optionalString(profile.allowedFrom)
+          ?.split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+    specs.push({
+      account: optionalString(profile.account) ?? optionalString(profile.accountLabel),
+      host,
+      port: profile.port === undefined ? undefined : Number(profile.port),
+      secure:
+        typeof profile.secure === "boolean"
+          ? profile.secure
+          : /^(1|true|yes)$/i.test(optionalString(profile.secure) ?? ""),
+      user,
+      from: optionalString(profile.from),
+      allowedFrom,
+      password: optionalString(profile.password),
+      keychainService: optionalString(profile.keychainService),
+      keychainAccount: optionalString(profile.keychainAccount),
+    });
+  }
+  return specs;
+}
+
+function resolveSmtpProfile(spec: SmtpProfileSpec): SmtpConfig {
+  const secure = spec.secure ?? false;
+  const port = spec.port ?? (secure ? 465 : 587);
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`Invalid SMTP port "${String(spec.port)}" for "${spec.account ?? spec.user}".`);
+  }
+  const from = spec.from ?? spec.user;
+  let pass = spec.password;
+  if (!pass) {
+    pass =
+      readKeychainPassword(spec.keychainService ?? spec.host, spec.keychainAccount ?? spec.user) ??
+      undefined;
+  }
+  if (!pass) {
+    throw new Error(
+      `No SMTP password found for "${spec.account ?? spec.user}". Configure a Keychain service/account or password.`
+    );
+  }
+  return {
+    host: spec.host,
+    port,
+    secure,
+    user: spec.user,
+    pass,
+    from,
+    allowedFrom: spec.allowedFrom ?? [],
+  };
+}
+
+/**
+ * Resolve the transport profile authorized for one concrete sending identity.
+ * Email aliases are matched against user/from/allowedFrom; account is used as a
+ * secondary disambiguator. Ambiguous or unavailable identities are rejected.
+ */
+export function resolveSmtpConfigForIdentity(
+  identity: { email?: string; account?: string } = {},
+  env: NodeJS.ProcessEnv = process.env
+): SmtpConfig {
+  const specs = smtpProfileSpecs(env);
+  if (specs.length === 0) return resolveSmtpConfig(env);
+  const email = identity.email?.trim().toLowerCase();
+  const account = identity.account?.trim().toLowerCase();
+  let candidates = specs;
+  if (email) {
+    const emailMatches = specs.filter((spec) =>
+      [spec.user, spec.from ?? spec.user, ...(spec.allowedFrom ?? [])]
+        .map((value) => value.toLowerCase())
+        .includes(email)
+    );
+    if (emailMatches.length > 0) candidates = emailMatches;
+    else {
+      throw new Error(`No SMTP transport profile authorizes From "${identity.email}".`);
+    }
+  }
+  if (account && candidates.length > 1) {
+    const accountMatches = candidates.filter((spec) => spec.account?.toLowerCase() === account);
+    if (accountMatches.length > 0) candidates = accountMatches;
+  }
+  if (candidates.length !== 1) {
+    throw new Error(
+      candidates.length === 0
+        ? "No SMTP transport profile matched the selected identity."
+        : `SMTP transport is ambiguous for "${identity.email ?? identity.account ?? "default"}"; configure distinct account/from mappings.`
+    );
+  }
+  return resolveSmtpProfile(candidates[0]);
+}
+
 /**
  * Validates attachment paths the same way the AppleScript path does: absolute
  * and existing. Returns nodemailer attachment descriptors.
@@ -293,9 +472,75 @@ export async function sendViaSmtp(
     });
     return { success: true, messageId: info.messageId };
   } catch (error) {
+    const responseCode =
+      typeof error === "object" &&
+      error !== null &&
+      typeof (error as { responseCode?: unknown }).responseCode === "number"
+        ? (error as { responseCode: number }).responseCode
+        : undefined;
     return {
       success: false,
       error: `SMTP send failed: ${error instanceof Error ? error.message : String(error)}`,
+      uncertain: responseCode === undefined,
+    };
+  } finally {
+    transporter.close();
+  }
+}
+
+function senderAddress(value: string): string {
+  const angle = value.match(/<([^<>]+)>/);
+  return (angle?.[1] ?? value).trim().toLowerCase();
+}
+
+/**
+ * Submit an already-composed RFC 5322 message without rebuilding its MIME.
+ * The caller supplies the SMTP envelope separately so Bcc can be omitted from
+ * delivered headers while those recipients still receive the message.
+ */
+export async function sendRawViaSmtp(
+  raw: Buffer,
+  envelope: RawSmtpEnvelope,
+  config: SmtpConfig,
+  createTransport: typeof nodemailer.createTransport = nodemailer.createTransport
+): Promise<SmtpSendResult> {
+  const requestedFrom = senderAddress(envelope.from);
+  const allowedFrom = new Set(
+    [config.user, config.from, ...(config.allowedFrom ?? [])].map(senderAddress)
+  );
+  if (!allowedFrom.has(requestedFrom)) {
+    return {
+      success: false,
+      error: `SMTP From "${envelope.from}" is not a configured sender identity.`,
+    };
+  }
+  if (envelope.to.length === 0) {
+    return { success: false, error: "SMTP envelope has no recipients." };
+  }
+
+  const transporter = createTransport({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: { user: config.user, pass: config.pass },
+  });
+  try {
+    const info = await transporter.sendMail({
+      envelope: { from: requestedFrom, to: envelope.to },
+      raw,
+    });
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    const responseCode =
+      typeof error === "object" &&
+      error !== null &&
+      typeof (error as { responseCode?: unknown }).responseCode === "number"
+        ? (error as { responseCode: number }).responseCode
+        : undefined;
+    return {
+      success: false,
+      error: `SMTP send failed: ${error instanceof Error ? error.message : String(error)}`,
+      uncertain: responseCode === undefined,
     };
   } finally {
     transporter.close();
@@ -346,6 +591,8 @@ export async function sendSerialViaSmtp(
   config: SmtpConfig,
   opts: {
     delayMs?: number;
+    /** Exact configured alias to use for every personalized message. */
+    from?: string;
     send?: typeof sendViaSmtp;
     sleep?: (ms: number) => Promise<void>;
   } = {}
@@ -363,7 +610,7 @@ export async function sendSerialViaSmtp(
           to: [r.email],
           subject: applyPlaceholders(subject, r.variables),
           body: applyPlaceholders(body, r.variables),
-          from: config.from,
+          from: opts.from ?? config.from,
         },
         config
       );

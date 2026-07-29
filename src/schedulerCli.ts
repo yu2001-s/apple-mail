@@ -19,7 +19,10 @@ export interface SchedulerCliDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export function runSchedulerCli(argv: string[], deps: SchedulerCliDeps = {}): number {
+export async function runSchedulerCli(
+  argv: string[],
+  deps: SchedulerCliDeps = {}
+): Promise<number> {
   const out = deps.stdout ?? ((line: string) => console.log(line));
   const err = deps.stderr ?? ((line: string) => console.error(line));
   if (argv.includes("--help")) {
@@ -29,7 +32,7 @@ export function runSchedulerCli(argv: string[], deps: SchedulerCliDeps = {}): nu
   try {
     loadFileConfig();
     const manager = deps.manager ?? new ScheduledSendManager();
-    const results = manager.runDueSends();
+    const results = await manager.runDueSends();
     if (results.length > 0) out(JSON.stringify(results));
     return results.some((result) => result.status === "failed") ? 1 : 0;
   } catch (error) {
@@ -48,7 +51,7 @@ export async function runSchedulerLoop(deps: SchedulerCliDeps = {}): Promise<num
     loadFileConfig();
     const manager = deps.manager ?? new ScheduledSendManager();
     while (true) {
-      const results = manager.runDueSends();
+      const results = await manager.runDueSends();
       if (results.length > 0) out(JSON.stringify(results));
       const delay = manager.nextWorkerDelayMs?.() ?? null;
       if (delay === null) return 0;
@@ -73,10 +76,10 @@ function isInvokedDirectly(): boolean {
 }
 
 if (isInvokedDirectly()) {
-  if (process.argv.slice(2).includes("--help")) {
-    process.exit(runSchedulerCli(["--help"]));
-  }
-  runSchedulerLoop().then(
+  const invocation = process.argv.slice(2).includes("--help")
+    ? runSchedulerCli(["--help"])
+    : runSchedulerLoop();
+  invocation.then(
     (code) => process.exit(code),
     (error) => {
       console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));

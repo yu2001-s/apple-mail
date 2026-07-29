@@ -15,6 +15,7 @@ import {
   imapFetchMessageId,
   normalizeMessageId,
   imapGetMessage,
+  imapReadMessage,
   imapMarkRead,
   imapMarkUnread,
   imapFlagMessage,
@@ -539,6 +540,62 @@ describe("IMAP message mutations (#43 Phase 3)", () => {
     expect(r.success).toBe(true);
     expect(r.info).toContain("Subject: Hello");
     expect(r.info).toContain("Hello body line");
+  });
+
+  it("read-message returns a complete resource and only exposes raw MIME on request", async () => {
+    const source = [
+      "Message-ID: <complete@example.com>",
+      "Content-Type: multipart/alternative; boundary=abc",
+      "",
+      "--abc",
+      "Content-Type: text/plain",
+      "",
+      "Plain body",
+      "--abc",
+      "Content-Type: text/html",
+      "",
+      "<p>HTML body</p>",
+      "--abc--",
+    ].join("\r\n");
+    const client: ImapClientLike = {
+      ...makeClient([], {}),
+      fetchOne: async () => ({
+        uid: 1,
+        envelope: {
+          subject: "Complete",
+          date: new Date("2026-07-29T00:00:00Z"),
+          messageId: "<complete@example.com>",
+          from: [{ name: "Alice", address: "alice@example.com" }],
+          replyTo: [{ address: "reply@example.com" }],
+          to: [{ address: "bob@example.com" }],
+          cc: [{ address: "carol@example.com" }],
+        },
+        source: Buffer.from(source),
+        flags: new Set(["\\Seen", "\\Flagged"]),
+      }),
+    };
+    const withoutRaw = await imapReadMessage(MID, false, {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(withoutRaw.message).toMatchObject({
+      messageId: MID,
+      rfcMessageId: "complete@example.com",
+      from: ["Alice <alice@example.com>"],
+      replyTo: ["reply@example.com"],
+      to: ["bob@example.com"],
+      cc: ["carol@example.com"],
+      textBody: "Plain body",
+      htmlBody: "<p>HTML body</p>",
+      flags: { isRead: true, isFlagged: true },
+    });
+    expect(withoutRaw.message?.rawMime).toBeUndefined();
+
+    const withRaw = await imapReadMessage(MID, true, {
+      config: cfg,
+      connect: async () => client,
+    });
+    expect(withRaw.message?.rawMime).toBe(source);
   });
 
   it("rejects an account override that disagrees with the composite message id", async () => {

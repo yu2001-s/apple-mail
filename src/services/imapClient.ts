@@ -26,6 +26,7 @@ import { ImapFlow } from "imapflow";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
+import type { MessageResource } from "@/types.js";
 
 export const IMAP_ENV = {
   user: "APPLE_MAIL_MCP_IMAP_USER",
@@ -72,6 +73,10 @@ interface ImapEnvelope {
   subject?: string;
   date?: Date | string;
   from?: ImapAddress[];
+  replyTo?: ImapAddress[];
+  to?: ImapAddress[];
+  cc?: ImapAddress[];
+  bcc?: ImapAddress[];
   messageId?: string;
   inReplyTo?: string;
 }
@@ -106,6 +111,12 @@ interface ImapMailboxListing {
   /** RFC 6154 special-use flag ("\\Trash", "\\Sent", …) when the server advertises it. */
   specialUse?: string;
 }
+interface ImapAppendResponse {
+  destination: string;
+  uidValidity?: bigint;
+  uid?: number;
+  seq?: number;
+}
 type FlagOpts = { uid: boolean };
 export interface ImapClientLike {
   connect(): Promise<void>;
@@ -130,6 +141,12 @@ export interface ImapClientLike {
   mailboxCreate(path: string): Promise<{ path: string; created: boolean }>;
   mailboxRename(path: string, newPath: string): Promise<{ path: string; newPath: string }>;
   mailboxDelete(path: string): Promise<{ path: string }>;
+  append?(
+    path: string,
+    content: string | Buffer,
+    flags?: string[],
+    idate?: Date | string
+  ): Promise<ImapAppendResponse | false>;
   messageFlagsAdd(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   messageFlagsRemove(range: number[], flags: string[], opts: FlagOpts): Promise<boolean>;
   messageMove(range: number[], destination: string, opts: FlagOpts): Promise<unknown>;
@@ -990,6 +1007,149 @@ async function withMailbox<T>(
   });
 }
 
+export type ImapSpecialMailbox = "drafts" | "sent";
+
+export interface ImapRawMessage {
+  id: string;
+  account: string;
+  path: string;
+  uid: number;
+  uidValidity?: string;
+  raw: Buffer;
+}
+
+function specialUseFlag(kind: ImapSpecialMailbox): string {
+  return kind === "drafts" ? "\\drafts" : "\\sent";
+}
+
+function specialMailboxFallbacks(kind: ImapSpecialMailbox): string[] {
+  return kind === "drafts"
+    ? ["Drafts", "[Gmail]/Drafts"]
+    : ["Sent", "Sent Messages", "Sent Mail", "[Gmail]/Sent Mail"];
+}
+
+async function resolveSpecialMailboxPath(
+  client: ImapClientLike,
+  kind: ImapSpecialMailbox
+): Promise<string> {
+  const boxes = await client.list();
+  const flag = specialUseFlag(kind);
+  const special = boxes.find((box) => box.specialUse?.toLowerCase() === flag);
+  if (special) return special.path;
+  for (const fallback of specialMailboxFallbacks(kind)) {
+    const match = boxes.find(
+      (box) =>
+        box.path.toLowerCase() === fallback.toLowerCase() ||
+        box.name.toLowerCase() === fallback.toLowerCase()
+    );
+    if (match) return match.path;
+  }
+  throw new Error(
+    `IMAP account does not expose a ${kind === "drafts" ? "Drafts" : "Sent"} mailbox.`
+  );
+}
+
+/**
+ * Append one exact RFC 5322 message to the provider's special-use mailbox.
+ * lookupHeader is used to recover the UID on servers without UIDPLUS.
+ */
+export async function imapAppendRawMessage(
+  raw: Buffer,
+  kind: ImapSpecialMailbox,
+  lookupHeader: { name: string; value: string },
+  deps: ImapDeps = {}
+): Promise<ImapRawMessage> {
+  return withClient(deps, async (client, cfg) => {
+    if (!client.append) throw new Error("The configured IMAP client does not support APPEND.");
+    const path = await resolveSpecialMailboxPath(client, kind);
+    const flags = kind === "drafts" ? ["\\Draft", "\\Seen"] : ["\\Seen"];
+    const appended = await client.append(path, raw, flags, new Date());
+    if (!appended) throw new Error(`IMAP APPEND to "${path}" returned no result.`);
+    let uid = appended.uid;
+    if (!uid) {
+      const lock = await client.getMailboxLock(path);
+      try {
+        const found = await client.search(
+          { header: { [lookupHeader.name]: lookupHeader.value } },
+          { uid: true }
+        );
+        const matches = Array.isArray(found) ? found : [];
+        uid = matches.at(-1);
+      } finally {
+        lock.release();
+      }
+    }
+    if (!uid) {
+      throw new Error(
+        `IMAP APPEND succeeded in "${path}", but the server did not return or expose its UID.`
+      );
+    }
+    return {
+      id: encodeImapId(cfg.accountLabel, path, uid),
+      account: cfg.accountLabel,
+      path,
+      uid,
+      uidValidity: appended.uidValidity?.toString(),
+      raw,
+    };
+  });
+}
+
+export async function imapFetchRawMessage(
+  id: string,
+  deps: ImapDeps = {}
+): Promise<ImapRawMessage | null> {
+  const ref = decodeImapId(id);
+  if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const message = await client.fetchOne(String(ref.uid), { source: true }, { uid: true });
+    if (!message || !message.source) return null;
+    return {
+      id,
+      account: ref.account,
+      path: ref.path,
+      uid: ref.uid,
+      raw: Buffer.isBuffer(message.source) ? message.source : Buffer.from(message.source, "utf8"),
+    };
+  });
+}
+
+export async function imapFindRawMessageByHeader(
+  kind: ImapSpecialMailbox,
+  header: { name: string; value: string },
+  deps: ImapDeps = {}
+): Promise<ImapRawMessage | null> {
+  return withClient(deps, async (client, cfg) => {
+    const path = await resolveSpecialMailboxPath(client, kind);
+    const lock = await client.getMailboxLock(path);
+    try {
+      const found = await client.search({ header: { [header.name]: header.value } }, { uid: true });
+      const uid = (Array.isArray(found) ? found : []).at(-1);
+      if (!uid) return null;
+      const message = await client.fetchOne(String(uid), { source: true }, { uid: true });
+      if (!message || !message.source) return null;
+      return {
+        id: encodeImapId(cfg.accountLabel, path, uid),
+        account: cfg.accountLabel,
+        path,
+        uid,
+        raw: Buffer.isBuffer(message.source) ? message.source : Buffer.from(message.source, "utf8"),
+      };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/** Permanently remove one exact IMAP message. Intended for replaced/sent drafts. */
+export async function imapDeleteExactMessage(id: string, deps: ImapDeps = {}): Promise<boolean> {
+  const ref = decodeImapId(id);
+  if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), (client) =>
+    client.messageDelete([ref.uid], { uid: true })
+  );
+}
+
 /** Read a message by composite IMAP id; returns "Subject: …\n\n<body>". */
 export async function imapGetMessage(
   id: string,
@@ -1014,6 +1174,74 @@ export async function imapGetMessage(
       extractHtmlBody(src) ??
       "(no readable body)";
     return { success: true, info: `Subject: ${subject}\n\n${body}` };
+  });
+}
+
+function formatAddresses(addresses?: ImapAddress[]): string[] {
+  return (addresses ?? [])
+    .filter((address) => Boolean(address.address))
+    .map((address) =>
+      address.name ? `${address.name} <${address.address}>` : (address.address as string)
+    );
+}
+
+/**
+ * Fetch a complete provider-neutral message resource in one IMAP operation.
+ * Source is always fetched because bodies require MIME decoding, but it is only
+ * exposed to the caller when `includeRawMime` is explicitly requested.
+ */
+export async function imapReadMessage(
+  id: string,
+  includeRawMime = false,
+  deps: ImapDeps = {}
+): Promise<{ success: boolean; message?: MessageResource; error?: string }> {
+  const ref = decodeImapId(id);
+  if (!ref) return { success: false, error: `Not an IMAP message id: "${id}".` };
+  return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
+    const msg = await client.fetchOne(
+      String(ref.uid),
+      { envelope: true, source: true, flags: true, bodyStructure: true },
+      { uid: true }
+    );
+    if (!msg) {
+      return {
+        success: false,
+        error: `IMAP message UID ${ref.uid} not found in "${ref.path}".`,
+      };
+    }
+    const source = msg.source ? msg.source.toString() : "";
+    const attachments = msg.bodyStructure
+      ? collectAttachments(msg.bodyStructure).map((attachment, index) => ({
+          id: `${id}#${attachment.part || index}`,
+          name: attachment.filename,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+        }))
+      : [];
+    const message: MessageResource = {
+      messageId: id,
+      rfcMessageId: msg.envelope?.messageId
+        ? normalizeMessageId(msg.envelope.messageId)
+        : undefined,
+      account: ref.account,
+      mailbox: ref.path,
+      from: formatAddresses(msg.envelope?.from),
+      replyTo: formatAddresses(msg.envelope?.replyTo),
+      to: formatAddresses(msg.envelope?.to),
+      cc: formatAddresses(msg.envelope?.cc),
+      bcc: formatAddresses(msg.envelope?.bcc),
+      subject: msg.envelope?.subject || "(no subject)",
+      date: msg.envelope?.date ? new Date(msg.envelope.date).toISOString() : undefined,
+      textBody: extractTextBody(source) ?? "",
+      htmlBody: extractHtmlBody(source) ?? undefined,
+      attachments,
+      flags: {
+        isRead: msg.flags?.has("\\Seen") ?? false,
+        isFlagged: msg.flags?.has("\\Flagged") ?? false,
+      },
+      ...(includeRawMime ? { rawMime: source } : {}),
+    };
+    return { success: true, message };
   });
 }
 

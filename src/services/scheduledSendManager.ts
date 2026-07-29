@@ -27,11 +27,7 @@ import {
 import { homedir } from "os";
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
-import {
-  DraftManager,
-  draftContentFingerprint,
-  type DraftResult,
-} from "@/services/draftManager.js";
+import { HybridDraftManager } from "@/services/hybridDraftManager.js";
 import type { Draft } from "@/types.js";
 
 export type ScheduledSendStatus =
@@ -85,10 +81,18 @@ export interface WorkerResult {
 
 export interface ScheduledSendManagerOptions {
   registryPath?: string;
-  draftManager?: DraftManager;
+  draftManager?: ScheduledDraftOperations;
   now?: () => Date;
   ensureWorker?: () => { success: boolean; error?: string };
   lockStaleMs?: number;
+}
+
+export interface ScheduledDraftOperations {
+  getDraft(draftId: string): Promise<{ success: boolean; draft?: Draft; error?: string }>;
+  sendDraft(
+    draftId: string,
+    expectedRevision?: string
+  ): Promise<{ success: boolean; draft?: Draft; error?: string }>;
 }
 
 export interface LaunchAgentOptions {
@@ -293,7 +297,7 @@ export function ensureScheduledSendLaunchAgent(options: LaunchAgentOptions): {
 function snapshotDraft(draft: Draft): ScheduledDraftSnapshot {
   return {
     draftId: draft.draftId,
-    fingerprint: draftContentFingerprint(draft),
+    fingerprint: draft.revision,
     from: draft.from,
     to: [...draft.to],
     cc: [...draft.cc],
@@ -306,7 +310,7 @@ function snapshotDraft(draft: Draft): ScheduledDraftSnapshot {
 export class ScheduledSendManager {
   private readonly registryPath: string;
   private readonly lockPath: string;
-  private readonly draftManager: DraftManager;
+  private readonly draftManager: ScheduledDraftOperations;
   private readonly now: () => Date;
   private readonly ensureWorker: () => { success: boolean; error?: string };
   private readonly lockStaleMs: number;
@@ -314,7 +318,7 @@ export class ScheduledSendManager {
   constructor(options: ScheduledSendManagerOptions = {}) {
     this.registryPath = options.registryPath ?? scheduleRegistryPathDefault();
     this.lockPath = `${this.registryPath}.lock`;
-    this.draftManager = options.draftManager ?? new DraftManager();
+    this.draftManager = options.draftManager ?? new HybridDraftManager();
     this.now = options.now ?? (() => new Date());
     this.ensureWorker = options.ensureWorker ?? (() => ({ success: true }));
     this.lockStaleMs = options.lockStaleMs ?? 2 * 60 * 1000;
@@ -395,7 +399,7 @@ export class ScheduledSendManager {
     );
   }
 
-  scheduleDrafts(draftIds: string[], sendAt: string): ScheduledSendResult {
+  async scheduleDrafts(draftIds: string[], sendAt: string): Promise<ScheduledSendResult> {
     const uniqueIds = [...new Set(draftIds)];
     if (uniqueIds.length === 0) {
       return { success: false, error: "At least one draft_id is required." };
@@ -408,14 +412,14 @@ export class ScheduledSendManager {
 
     const drafts: Draft[] = [];
     for (const draftId of uniqueIds) {
-      const found: DraftResult = this.draftManager.getDraft(draftId);
+      const found = await this.draftManager.getDraft(draftId);
       if (!found.success || !found.draft) {
         return {
           success: false,
           error: found.error ?? `Draft "${draftId}" was not found.`,
         };
       }
-      if (found.draft.hasAttachments) {
+      if (found.draft.hasAttachments && found.draft.backend !== "imap") {
         return {
           success: false,
           error: `Draft "${draftId}" has attachments and cannot be safely scheduled through Mail's scripting bridge.`,
@@ -614,25 +618,25 @@ export class ScheduledSendManager {
     });
   }
 
-  runDueSends(): WorkerResult[] {
+  async runDueSends(): Promise<WorkerResult[]> {
     const results: WorkerResult[] = [];
     while (true) {
       const job = this.claimDue();
       if (!job) break;
-      const current = this.draftManager.getDraft(job.draftId);
+      const current = await this.draftManager.getDraft(job.draftId);
       if (!current.success || !current.draft) {
         const error = current.error ?? "Scheduled draft was not found.";
         this.markResult(job.scheduleId, "failed", error);
         results.push({ scheduleId: job.scheduleId, status: "failed", error });
         continue;
       }
-      if (draftContentFingerprint(current.draft) !== job.snapshot.fingerprint) {
+      if (current.draft.revision !== job.snapshot.fingerprint) {
         const error = "Draft content changed after scheduling; it was not sent.";
         this.markResult(job.scheduleId, "failed", error);
         results.push({ scheduleId: job.scheduleId, status: "failed", error });
         continue;
       }
-      const sent = this.draftManager.sendDraft(job.draftId);
+      const sent = await this.draftManager.sendDraft(job.draftId, job.snapshot.fingerprint);
       if (!sent.success) {
         const error = sent.error ?? "Mail.app failed to send the scheduled draft.";
         this.markResult(job.scheduleId, "failed", error);

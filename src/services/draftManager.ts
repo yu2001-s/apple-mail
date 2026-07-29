@@ -73,6 +73,8 @@ export interface DraftManagerOptions {
 }
 
 export interface DraftUpdate {
+  /** Reject the mutation when the saved draft changed after it was reviewed. */
+  expectedRevision?: string;
   from?: string;
   to?: string[];
   cc?: string[];
@@ -178,7 +180,9 @@ function legacyNormalizedBody(value: string): string {
     .trimEnd();
 }
 
-function fingerprint(draft: NativeDraft): string {
+function fingerprint(
+  draft: Pick<Draft, "from" | "to" | "cc" | "bcc" | "subject" | "body">
+): string {
   return fingerprintWithBody(draft, normalizedBody(draft.body));
 }
 
@@ -206,7 +210,9 @@ function draftIdFromUuid(uuid: string): string {
   return `${DRAFT_ID_PREFIX}${uuid}`;
 }
 
-function nativeLocator(draft: NativeDraft): string {
+function nativeLocator(
+  draft: Pick<Draft, "sourceKind" | "accountId" | "mailboxName" | "messageId" | "nativeId">
+): string {
   return draft.sourceKind === "mailbox"
     ? [
         "mailbox",
@@ -517,12 +523,12 @@ export class DraftManager {
         }
         continue;
       }
+      // A locator/native-id match identifies the resource. The fingerprint is
+      // its revision, not its identity: Mail.app/iPhone edits must keep the same
+      // public draft_id while producing a new revision.
       let uuid = [...unmatched].find((candidate) => {
         const entry = registry.drafts[candidate];
-        return (
-          (entry.locator === nativeLocator(native) || entry.nativeId === native.nativeId) &&
-          variants.includes(entry.fingerprint)
-        );
+        return entry.locator === nativeLocator(native) || entry.nativeId === native.nativeId;
       });
       if (!uuid) {
         uuid = [...unmatched].find((candidate) =>
@@ -537,7 +543,7 @@ export class DraftManager {
         fingerprint: fp,
         updatedAt: new Date().toISOString(),
       };
-      output.push({ draftId: draftIdFromUuid(uuid), ...native });
+      output.push({ draftId: draftIdFromUuid(uuid), revision: fp, ...native });
     }
 
     for (const stale of unmatched) delete registry.drafts[stale];
@@ -637,6 +643,15 @@ export class DraftManager {
     if (!uuid) return { success: false, error: `Invalid draft id "${draftId}".` };
     const current = this.getDraft(draftId);
     if (!current.success || !current.draft) return current;
+    if (
+      update.expectedRevision !== undefined &&
+      update.expectedRevision !== current.draft.revision
+    ) {
+      return {
+        success: false,
+        error: `Draft conflict: expected revision "${update.expectedRevision}", but the current revision is "${current.draft.revision}". Read the draft again before editing.`,
+      };
+    }
 
     let sender: string | undefined;
     if (update.from !== undefined) {
@@ -734,7 +749,10 @@ export class DraftManager {
         updatedAt: new Date().toISOString(),
       };
       this.saveRegistry(registry);
-      return { success: true, draft: { draftId, ...actual } };
+      return {
+        success: true,
+        draft: { draftId, revision: fingerprint(actual), ...actual },
+      };
     }
 
     const commands = [
@@ -781,14 +799,23 @@ export class DraftManager {
       updatedAt: new Date().toISOString(),
     };
     this.saveRegistry(registry);
-    return { success: true, draft: { draftId, ...native } };
+    return {
+      success: true,
+      draft: { draftId, revision: fingerprint(native), ...native },
+    };
   }
 
-  sendDraft(draftId: string): DraftResult {
+  sendDraft(draftId: string, expectedRevision?: string): DraftResult {
     const uuid = uuidFromDraftId(draftId);
     if (!uuid) return { success: false, error: `Invalid draft id "${draftId}".` };
     const current = this.getDraft(draftId);
     if (!current.success || !current.draft) return current;
+    if (expectedRevision !== undefined && expectedRevision !== current.draft.revision) {
+      return {
+        success: false,
+        error: `Draft conflict: expected revision "${expectedRevision}", but the current revision is "${current.draft.revision}". Read the draft again before sending.`,
+      };
+    }
     if (current.draft.sourceKind === "mailbox" && current.draft.hasAttachments) {
       return {
         success: false,

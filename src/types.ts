@@ -129,6 +129,37 @@ export interface MessageContent {
 }
 
 /**
+ * Provider-neutral full message resource returned by robust read tools.
+ *
+ * The public `messageId` remains the opaque connector handle used by follow-up
+ * tools. IMAP UID/mailbox details and Mail.app numeric ids stay internal.
+ */
+export interface MessageResource {
+  messageId: string;
+  rfcMessageId?: string;
+  account: string;
+  mailbox: string;
+  from: string[];
+  replyTo: string[];
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  date?: string;
+  textBody: string;
+  htmlBody?: string;
+  attachments: Attachment[];
+  flags: {
+    isRead: boolean;
+    isFlagged: boolean;
+    isJunk?: boolean;
+    isDeleted?: boolean;
+  };
+  /** Present only when the caller explicitly requests the original source. */
+  rawMime?: string;
+}
+
+/**
  * Represents a mailbox (folder) in Apple Mail.
  */
 export interface Mailbox {
@@ -217,6 +248,8 @@ export interface SendingIdentity {
  */
 export interface Draft {
   draftId: string;
+  /** Content revision used for optimistic concurrency with Mail.app/iPhone edits. */
+  revision: string;
   nativeId: string;
   from: string;
   to: string[];
@@ -224,9 +257,11 @@ export interface Draft {
   bcc: string[];
   subject: string;
   body: string;
+  /** Optional HTML alternative stored in the RFC 5322 draft. */
+  htmlBody?: string;
   visible: boolean;
   /** Whether this handle came from a saved Drafts mailbox or a live compose session. */
-  sourceKind: "mailbox" | "compose";
+  sourceKind: "mailbox" | "compose" | "imap";
   /** Stable Mail account identifier for saved mailbox drafts. */
   accountId?: string;
   /** Mail account display name for saved mailbox drafts. */
@@ -237,6 +272,12 @@ export interface Draft {
   messageId?: string;
   /** Whether Mail reports one or more attachments on this draft. */
   hasAttachments: boolean;
+  /** Attachment metadata for IMAP/MIME drafts. */
+  attachments?: Attachment[];
+  /** Storage backend used by this draft resource. */
+  backend?: "imap" | "applescript";
+  /** Delivery state used to prevent automatic duplicate SMTP sends. */
+  deliveryState?: "draft" | "sending" | "sent" | "needs_review";
 }
 
 /**

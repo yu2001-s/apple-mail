@@ -2151,10 +2151,19 @@ export class AppleMailManager {
    * @param send - If true, send immediately; if false, save as draft
    * @returns true if reply created/sent successfully
    */
-  replyToMessage(id: string, body: string, replyAll = false, send = true): boolean {
+  replyToMessage(
+    id: string,
+    body: string,
+    replyAll = false,
+    send = true,
+    sender?: string
+  ): boolean {
     const safeBody = escapeForAppleScriptBody(body);
     const replyAllClause = replyAll ? " with reply to all" : "";
     const sendAction = send ? "send theReply" : "";
+    const senderAction = sender
+      ? `set sender of theReply to "${escapeForAppleScript(sender)}"`
+      : "";
 
     const script = buildAppLevelScript(`
       try
@@ -2166,6 +2175,7 @@ export class AppleMailManager {
                 set msg to item 1 of matchingMsgs
                 set theReply to reply msg without opening window${replyAllClause}
                 set content of theReply to "${safeBody}"
+                ${senderAction}
                 ${sendAction}
                 return "ok"
               end if
@@ -2197,9 +2207,12 @@ export class AppleMailManager {
    * @param send - If true, send immediately; if false, save as draft
    * @returns true if forward created/sent successfully
    */
-  forwardMessage(id: string, to: string[], body?: string, send = true): boolean {
+  forwardMessage(id: string, to: string[], body?: string, send = true, sender?: string): boolean {
     const safeBody = body ? escapeForAppleScriptBody(body) : "";
     const sendAction = send ? "send theForward" : "";
+    const senderAction = sender
+      ? `set sender of theForward to "${escapeForAppleScript(sender)}"`
+      : "";
 
     // Build recipient additions
     let recipientCommands = "";
@@ -2218,6 +2231,7 @@ export class AppleMailManager {
                 set theForward to forward msg without opening window
                 ${recipientCommands}
                 ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
+                ${senderAction}
                 ${sendAction}
                 return "ok"
               end if

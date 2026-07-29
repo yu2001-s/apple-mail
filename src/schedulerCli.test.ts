@@ -2,21 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { runSchedulerCli, runSchedulerLoop } from "@/schedulerCli.js";
 
 describe("scheduled-send worker CLI", () => {
-  it("exits cleanly when nothing is due", () => {
+  it("exits cleanly when nothing is due", async () => {
     const out: string[] = [];
-    const code = runSchedulerCli([], {
-      manager: { runDueSends: () => [] },
+    const code = await runSchedulerCli([], {
+      manager: { runDueSends: async () => [] },
       stdout: (line) => out.push(line),
     });
     expect(code).toBe(0);
     expect(out).toEqual([]);
   });
 
-  it("reports processed results and returns nonzero for a failed job", () => {
+  it("reports processed results and returns nonzero for a failed job", async () => {
     const out: string[] = [];
-    const code = runSchedulerCli([], {
+    const code = await runSchedulerCli([], {
       manager: {
-        runDueSends: () => [
+        runDueSends: async () => [
           {
             scheduleId: "apple-schedule:00000000-0000-4000-8000-000000000001",
             status: "failed",
@@ -30,11 +30,11 @@ describe("scheduled-send worker CLI", () => {
     expect(out.join("\n")).toMatch(/Draft changed/);
   });
 
-  it("prints help without running the worker", () => {
-    const runDueSends = vi.fn(() => []);
+  it("prints help without running the worker", async () => {
+    const runDueSends = vi.fn(async () => []);
     const out: string[] = [];
     expect(
-      runSchedulerCli(["--help"], {
+      await runSchedulerCli(["--help"], {
         manager: { runDueSends },
         stdout: (line) => out.push(line),
       })
@@ -44,7 +44,7 @@ describe("scheduled-send worker CLI", () => {
   });
 
   it("keeps polling only while active jobs exist", async () => {
-    const runDueSends = vi.fn(() => []);
+    const runDueSends = vi.fn(async () => []);
     const delays = [250, null];
     const nextWorkerDelayMs = vi.fn(() => delays.shift() ?? null);
     const sleep = vi.fn(async () => undefined);

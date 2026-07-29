@@ -25,7 +25,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AppleMailManager, resolveAttachmentSaveTarget } from "@/services/appleMailManager.js";
-import { DRAFT_ID_PATTERN, DraftManager } from "@/services/draftManager.js";
+import { DRAFT_ID_PATTERN } from "@/services/draftManager.js";
+import { HybridDraftManager } from "@/services/hybridDraftManager.js";
 import {
   ensureScheduledSendLaunchAgent,
   SCHEDULE_ID_PATTERN,
@@ -40,7 +41,7 @@ import {
   sendSerialViaSmtp,
   shouldUseSmtp,
   isSmtpConfigured,
-  resolveSmtpConfig,
+  resolveSmtpConfigForIdentity,
   type SmtpConfig,
 } from "@/services/smtpMailer.js";
 import {
@@ -72,6 +73,7 @@ import {
   imapDeleteMailbox,
   imapRenameMailbox,
   imapGetMessage,
+  imapReadMessage,
   imapMarkRead,
   imapMarkUnread,
   imapFlagMessage,
@@ -96,7 +98,7 @@ import {
   planCountSources,
   type MessageRow,
 } from "@/services/imapMultiAccount.js";
-import type { Account, SearchDiagnostics, SearchResult } from "@/types.js";
+import type { Account, MessageResource, SearchDiagnostics, SearchResult } from "@/types.js";
 import { routeMessage } from "@/services/messageRouter.js";
 import { runDoctor, formatDoctorReport } from "@/tools/doctor.js";
 import { registerResourcesAndPrompts } from "@/tools/resourcesAndPrompts.js";
@@ -105,7 +107,12 @@ import {
   MAX_INLINE_ATTACHMENT_BASE64_INPUT_CHARS,
 } from "@/utils/attachmentLimits.js";
 import { normalizeSubject, subjectFromGetMessage } from "@/tools/thread.js";
-import { extractRfcMessageIdFromSource } from "@/utils/mimeParse.js";
+import {
+  extractHtmlBody,
+  extractRfcMessageIdFromSource,
+  extractTextBody,
+  parseMimeAttachments,
+} from "@/utils/mimeParse.js";
 import { ImapIdleWatcher } from "@/services/imapIdle.js";
 import { loadFileConfig } from "@/services/fileConfig.js";
 import { isOrphaned } from "@/utils/orphan.js";
@@ -359,7 +366,7 @@ const server = new McpServer(
  * Handles all AppleScript execution and mail operations.
  */
 const mailManager = new AppleMailManager();
-const draftManager = new DraftManager();
+const draftManager = new HybridDraftManager();
 const scheduledSendManager = new ScheduledSendManager({
   draftManager,
   ensureWorker: () =>
@@ -372,6 +379,116 @@ const scheduledSendManager = new ScheduledSendManager({
 // MCP resources (accounts/templates/mailboxes) and prompts (triage/reply/
 // summary) — additive context + workflows alongside the tools (D2).
 registerResourcesAndPrompts(server, mailManager);
+
+/**
+ * Resolve an explicitly requested sending identity once at the tool boundary.
+ * Every outgoing path uses the same resource semantics: callers choose an
+ * identity, and transports receive the concrete sender values they understand.
+ * No path may silently reinterpret an account label as an email alias.
+ */
+function requestedSendingIdentity(selector?: string) {
+  if (selector === undefined) return { identity: undefined };
+  const identity = draftManager.resolveIdentity(selector);
+  return identity
+    ? { identity }
+    : {
+        identity: undefined,
+        error: `Sending identity "${selector}" is unavailable, disabled, or ambiguous. List sending identities first.`,
+      };
+}
+
+/** Read one complete message resource through the correct backend. */
+async function readMessageResource(
+  id: string,
+  options: { account?: string; mailbox?: string; includeRawMime?: boolean } = {}
+): Promise<{ message?: MessageResource; error?: string }> {
+  if (id.startsWith("imap:")) {
+    const result = await imapReadMessage(id, options.includeRawMime === true, {
+      account: options.account,
+    });
+    return result.success && result.message
+      ? { message: result.message }
+      : { error: result.error ?? `Message "${id}" was not found.` };
+  }
+
+  const metadata = mailManager.getMessageById(id, true);
+  if (!metadata) return { error: `Message "${id}" was not found.` };
+  const hint = {
+    account: options.account ?? metadata.account,
+    mailbox: options.mailbox ?? metadata.mailbox,
+  };
+  const raw = mailManager.getRawSource(id, hint) ?? "";
+  const content = mailManager.getMessageContent(id, true, hint);
+  const headers = parseOriginalHeaders(raw);
+  const mimeAttachments = parseMimeAttachments(raw).map((attachment, index) => ({
+    id: `${id}#mime-${index}`,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+  }));
+  const scriptAttachments =
+    mimeAttachments.length > 0
+      ? []
+      : mailManager.listAttachments(id).map((attachment) => ({
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+        }));
+  const message: MessageResource = {
+    messageId: id,
+    rfcMessageId: extractRfcMessageIdFromSource(raw) || content?.rfcMessageId || undefined,
+    account: metadata.account,
+    mailbox: metadata.mailbox,
+    from: headers.from.length ? headers.from : [metadata.sender],
+    replyTo: headers.replyTo,
+    to: headers.to.length ? headers.to : metadata.recipients,
+    cc: headers.cc.length ? headers.cc : (metadata.ccRecipients ?? []),
+    bcc: headers.bcc.length ? headers.bcc : (metadata.bccRecipients ?? []),
+    subject: content?.subject ?? metadata.subject,
+    date: metadata.dateSent?.toISOString() ?? metadata.dateReceived.toISOString(),
+    textBody: extractTextBody(raw) ?? content?.plainText ?? "",
+    htmlBody: extractHtmlBody(raw) ?? content?.htmlContent,
+    attachments: [...mimeAttachments, ...scriptAttachments],
+    flags: {
+      isRead: metadata.isRead,
+      isFlagged: metadata.isFlagged,
+      isJunk: metadata.isJunk,
+      isDeleted: metadata.isDeleted,
+    },
+    ...(options.includeRawMime ? { rawMime: raw } : {}),
+  };
+  return { message };
+}
+
+/**
+ * Enrich list/thread rows sequentially so Mail.app is not flooded with
+ * concurrent Apple Events. A failed body read remains visible as a row-level
+ * diagnostic rather than dropping the message from the conversation.
+ */
+async function enrichMessageRows<T extends object>(
+  rows: T[],
+  includeBodies: boolean
+): Promise<Record<string, unknown>[]> {
+  if (!includeBodies) return rows as Record<string, unknown>[];
+  const enriched: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    const record = row as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : "";
+    if (!id) {
+      enriched.push(record);
+      continue;
+    }
+    const read = await readMessageResource(id, {
+      account: typeof record.account === "string" ? record.account : undefined,
+      mailbox: typeof record.mailbox === "string" ? record.mailbox : undefined,
+    });
+    enriched.push(
+      read.message ? { ...record, ...read.message } : { ...record, read_error: read.error }
+    );
+  }
+  return enriched;
+}
 
 // Response helpers, the AppleScript serial gate, withErrorHandling, and the
 // message backend router now live in @/tools/respond and @/services/messageRouter.
@@ -637,18 +754,95 @@ server.registerTool(
   )
 );
 
+// --- read-message ---
+
+server.registerTool(
+  "read-message",
+  {
+    description:
+      "Use when: reading one message as a complete Gmail-like resource after obtaining its exact id from search-messages/list-messages. Returns envelope fields, both decoded plain-text and HTML bodies, attachments, flags, account/mailbox location, and stable RFC Message-ID. Set include_raw_mime only when exact MIME/header verification is necessary.\nDo not use when: you only need search summaries (use search-messages) or a whole conversation (use get-thread with includeBodies=true).",
+    inputSchema: {
+      id: MESSAGE_ID_SCHEMA,
+      account: z.string().optional().describe("Account hint for a direct Apple Mail lookup"),
+      mailbox: z.string().optional().describe("Mailbox hint for a direct Apple Mail lookup"),
+      include_raw_mime: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Include the original RFC 5322 MIME source; may be very large"),
+    },
+    outputSchema: {
+      message: z.object({}).passthrough().optional(),
+    },
+  },
+  withErrorHandling(async ({ id, account, mailbox, include_raw_mime }) => {
+    const result = await readMessageResource(id, {
+      account,
+      mailbox,
+      includeRawMime: include_raw_mime,
+    });
+    if (!result.message) return errorResponse(result.error ?? `Message "${id}" was not found.`);
+    return successResponse(
+      `Read "${result.message.subject}" from ${result.message.from.join(", ") || "(unknown sender)"}.`,
+      { message: result.message }
+    );
+  }, "Error reading message")
+);
+
+// --- batch-read-messages ---
+
+server.registerTool(
+  "batch-read-messages",
+  {
+    description:
+      "Use when: reading the complete contents of several already-inspected messages in one bounded call, such as a shortlist from search-messages or the rows returned by get-thread. Returns one result per requested id and never drops individual failures.\nDo not use when: you only need ids/summaries, or when the set has not been inspected first.",
+    inputSchema: {
+      ids: z
+        .array(MESSAGE_ID_SCHEMA)
+        .min(1, "At least one message ID is required")
+        .max(20, "Cannot read more than 20 complete messages in one call"),
+    },
+    outputSchema: {
+      messages: z.array(z.object({}).passthrough()).optional(),
+      errors: z.array(z.object({}).passthrough()).optional(),
+      count: z.number().optional(),
+      failed: z.number().optional(),
+    },
+  },
+  withErrorHandling(async ({ ids }) => {
+    const messages: MessageResource[] = [];
+    const errors: { id: string; error: string }[] = [];
+    // Sequential by design: concurrent Apple Events are unreliable and can
+    // make Mail.app return false "not found" results under load.
+    for (const id of ids) {
+      const result = await readMessageResource(id);
+      if (result.message) messages.push(result.message);
+      else errors.push({ id, error: result.error ?? "Message could not be read." });
+    }
+    return successResponse(
+      `Read ${messages.length} of ${ids.length} message(s)${errors.length ? `; ${errors.length} failed` : ""}.`,
+      { messages, errors, count: messages.length, failed: errors.length }
+    );
+  }, "Error batch-reading messages")
+);
+
 // --- get-thread ---
 
 server.registerTool(
   "get-thread",
   {
     description:
-      "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject.\nReturns: the thread's normalized subject and its messages (id, date, subject, sender, read state).\nDo not use when: you only need the single message (use get-message) or are searching by arbitrary criteria (use search-messages).",
+      "Use when: you have one message id and want the whole conversation it belongs to, oldest-first. With an imap: id it threads by References/Message-ID; otherwise it groups by normalized subject. Set includeBodies=true to return each message as a complete resource instead of summaries.\nReturns: the thread's normalized subject and messages.\nDo not use when: you only need the single message (use read-message) or are searching by arbitrary criteria (use search-messages).",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA.describe("A message ID in the conversation (numeric or imap:…)"),
       account: z.string().optional().describe("Account to search (omit to search all)"),
       mailbox: z.string().optional().describe("Mailbox to search (omit to search all)"),
       limit: z.number().optional().describe("Max messages in the thread (default 50)"),
+      includeBodies: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Include full message bodies, envelope fields, and attachments"),
     },
     outputSchema: {
       subject: z.string().optional(),
@@ -657,13 +851,16 @@ server.registerTool(
       partial: z.boolean().optional(),
     },
   },
-  withErrorHandling(async ({ id, account, mailbox, limit = 50 }) => {
+  withErrorHandling(async ({ id, account, mailbox, limit = 50, includeBodies }) => {
     // True threading via References/Message-ID when we have an imap: id (I5);
     // falls through to subject grouping if the server lacks HEADER search or
     // nothing References-linked is found.
     if (id.startsWith("imap:")) {
       const t = await imapThread(id, { account }, limit);
-      if (t && t.count > 1) return successResponse(t.text, { ...t.structured });
+      if (t && t.count > 1) {
+        const messages = await enrichMessageRows(t.structured.messages, includeBodies);
+        return successResponse(t.text, { ...t.structured, messages });
+      }
     }
 
     // Resolve the seed message's subject, then gather the conversation by
@@ -690,9 +887,10 @@ server.registerTool(
     if (shouldUseImap(account)) {
       if (account !== undefined) {
         const r = await imapSearchMessages({ subject: base, mailbox, account, limit });
+        const messages = await enrichMessageRows(r.messages, includeBodies);
         return successResponse(`Thread "${base}":\n${r.text}`, {
           subject: base,
-          messages: r.messages,
+          messages,
           count: r.count,
           partial: r.partial,
         });
@@ -730,9 +928,10 @@ server.registerTool(
         partial,
         timedOutAccounts: [...apple.diagnostics.timedOutAccounts, ...fan.accountsFailed],
       });
+      const enrichedRows = await enrichMessageRows(orderedRows, includeBodies);
       const structured = {
         subject: base,
-        messages: orderedRows,
+        messages: enrichedRows,
         count: orderedRows.length,
         partial,
       };
@@ -760,9 +959,11 @@ server.registerTool(
       .slice()
       .sort((a, b) => a.dateReceived.getTime() - b.dateReceived.getTime());
     const coverageBlock = partialCoverageBlock(diagnostics);
+    const summaryRows = ordered.map(messageSummary);
+    const enrichedRows = await enrichMessageRows(summaryRows, includeBodies);
     const structured = {
       subject: base,
-      messages: ordered.map(messageSummary),
+      messages: enrichedRows,
       count: ordered.length,
       partial: diagnostics.partial,
     };
@@ -887,14 +1088,27 @@ server.registerTool(
   "send-email",
   {
     description:
-      "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments and a chosen transport.\nReturns: a confirmation naming the recipients and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
+      "Use when: the user has explicitly confirmed they want to send a single email now to the given recipients (to/cc/bcc are arrays), optionally with attachments, a concrete From identity, and a chosen transport. Select `from` from list-sending-identities; `account` is deprecated compatibility only.\nReturns: the actual From identity, SMTP message id when available, recipients, transport, and attachment count.\nDo not use when: the user wants to review first (use create-draft), is replying to or forwarding an existing message (use reply-to-message / forward-message), or wants per-recipient personalized copies (use send-serial-email).\nSafety: this SENDS real email immediately and it cannot be unsent — require explicit user confirmation of the exact From identity, recipients, subject, and body before calling. Prefer create-draft when there is any doubt.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
       body: z.string().min(1, "Body is required"),
+      html_body: z
+        .string()
+        .optional()
+        .describe("Optional HTML alternative; body remains the plain-text fallback"),
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
-      account: z.string().optional().describe("Account to send from"),
+      from: z
+        .string()
+        .optional()
+        .describe(
+          "Sending identity id, exact email address, or formatted sender from list-sending-identities"
+        ),
+      account: z
+        .string()
+        .optional()
+        .describe("Deprecated compatibility selector; use `from` for a concrete sender identity"),
       attachments: ATTACHMENTS_SCHEMA,
       transport: z
         .enum(["applescript", "smtp"])
@@ -912,48 +1126,87 @@ server.registerTool(
       recipients: z.array(z.string()).optional(),
       attachmentCount: z.number().optional(),
       transport: z.string().optional(),
+      from: z.string().optional(),
+      identity_id: z.string().optional(),
+      message_id: z.string().optional(),
     },
   },
-  withErrorHandling(async ({ to, subject, body, cc, bcc, account, attachments, transport }) => {
-    const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
-
-    const attachmentCount = attachments?.length ?? 0;
-
-    // Prefer SMTP when explicitly requested, or automatically when it is
-    // configured and no transport was specified — except when a non-email
-    // `account` label requests Mail.app account selection (see shouldUseSmtp).
-    // Explicit transport:"applescript" always forces the Mail.app path.
-    if (shouldUseSmtp(transport, account)) {
-      // `account` is a Mail.app account label for the AppleScript path; for SMTP
-      // it only makes sense as a From override when it is an actual address.
-      // A bare label (only possible here via explicit transport:"smtp") must not
-      // corrupt the From — fall back to the configured SMTP From in that case.
-      const smtpFrom = account?.includes("@") ? account : undefined;
-      const result = await sendViaSmtp({ to, subject, body, cc, bcc, from: smtpFrom, attachments });
-      if (!result.success) {
-        return errorResponse(result.error ?? "Failed to send email via SMTP.");
+  withErrorHandling(
+    async ({ to, subject, body, cc, bcc, from, account, attachments, transport }) => {
+      if (from !== undefined && account !== undefined) {
+        return errorResponse("Pass `from` or deprecated `account`, not both.");
       }
-      return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`, {
+      const resolved = requestedSendingIdentity(from);
+      if (resolved.error) return errorResponse(resolved.error);
+      const identity = resolved.identity;
+      const attachInfo = attachments?.length ? ` with ${attachments.length} attachment(s)` : "";
+
+      const attachmentCount = attachments?.length ?? 0;
+      const transportSelector = identity?.email ?? account;
+
+      // Prefer SMTP when explicitly requested, or automatically when it is
+      // configured and no transport was specified — except when a non-email
+      // `account` label requests Mail.app account selection (see shouldUseSmtp).
+      // Explicit transport:"applescript" always forces the Mail.app path.
+      if (shouldUseSmtp(transport, transportSelector)) {
+        // `account` is a Mail.app account label for the AppleScript path; for SMTP
+        // it only makes sense as a From override when it is an actual address.
+        // A bare label (only possible here via explicit transport:"smtp") must not
+        // corrupt the From — fall back to the configured SMTP From in that case.
+        const smtpFrom = identity?.email ?? (account?.includes("@") ? account : undefined);
+        let smtpConfig: SmtpConfig;
+        try {
+          smtpConfig = resolveSmtpConfigForIdentity({
+            email: identity?.email ?? smtpFrom,
+            account: identity?.accountName,
+          });
+        } catch (error) {
+          return errorResponse(error instanceof Error ? error.message : String(error));
+        }
+        const result = await sendViaSmtp(
+          {
+            to,
+            subject,
+            body,
+            cc,
+            bcc,
+            from: smtpFrom,
+            attachments,
+          },
+          smtpConfig
+        );
+        if (!result.success) {
+          return errorResponse(result.error ?? "Failed to send email via SMTP.");
+        }
+        return successResponse(`Email sent via SMTP to ${to.join(", ")}${attachInfo}`, {
+          ok: true,
+          recipients: to,
+          attachmentCount,
+          transport: "smtp",
+          from: identity?.sender ?? smtpFrom,
+          identity_id: identity?.identityId,
+          message_id: result.messageId,
+        });
+      }
+
+      const appleSender = identity?.sender ?? account;
+      const success = mailManager.sendEmail(to, subject, body, cc, bcc, appleSender, attachments);
+
+      if (!success) {
+        return errorResponse("Failed to send email. Check Mail.app configuration.");
+      }
+
+      return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
         ok: true,
         recipients: to,
         attachmentCount,
-        transport: "smtp",
+        transport: "applescript",
+        from: identity?.sender ?? appleSender,
+        identity_id: identity?.identityId,
       });
-    }
-
-    const success = mailManager.sendEmail(to, subject, body, cc, bcc, account, attachments);
-
-    if (!success) {
-      return errorResponse("Failed to send email. Check Mail.app configuration.");
-    }
-
-    return successResponse(`Email sent to ${to.join(", ")}${attachInfo}`, {
-      ok: true,
-      recipients: to,
-      attachmentCount,
-      transport: "applescript",
-    });
-  }, "Error sending email")
+    },
+    "Error sending email"
+  )
 );
 
 // --- send-serial-email ---
@@ -984,7 +1237,16 @@ server.registerTool(
         .string()
         .min(1, "Body is required")
         .describe("Email body — use {{Key}} for placeholders"),
-      account: z.string().optional().describe("Account to send from"),
+      from: z
+        .string()
+        .optional()
+        .describe(
+          "Sending identity id, exact email address, or formatted sender from list-sending-identities"
+        ),
+      account: z
+        .string()
+        .optional()
+        .describe("Deprecated compatibility selector; use `from` for a concrete sender identity"),
       delayMs: z
         .number()
         .min(0)
@@ -996,6 +1258,8 @@ server.registerTool(
       ok: z.boolean().optional(),
       sent: z.number().optional(),
       failed: z.number().optional(),
+      from: z.string().optional(),
+      identity_id: z.string().optional(),
       results: z
         .array(
           z
@@ -1009,13 +1273,31 @@ server.registerTool(
         .optional(),
     },
   },
-  withErrorHandling(async ({ recipients, subject, body, account, delayMs }) => {
+  withErrorHandling(async ({ recipients, subject, body, from, account, delayMs }) => {
+    if (from !== undefined && account !== undefined) {
+      return errorResponse("Pass `from` or deprecated `account`, not both.");
+    }
+    const resolved = requestedSendingIdentity(from);
+    if (resolved.error) return errorResponse(resolved.error);
+    const identity = resolved.identity;
+    const transportSelector = identity?.email ?? account;
     // 2.5.0: prefer direct SMTP for mail-merge when configured (and not targeting
     // a bare Mail.app account label); Mail.app fallback when not configured.
-    const smtpCfg = shouldUseSmtp(undefined, account) ? resolveSmtpOrFallback() : null;
+    const smtpCfg = shouldUseSmtp(undefined, transportSelector)
+      ? resolveSmtpOrFallback(identity)
+      : null;
     const results = smtpCfg
-      ? await sendSerialViaSmtp(recipients, subject, body, smtpCfg, { delayMs })
-      : mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
+      ? await sendSerialViaSmtp(recipients, subject, body, smtpCfg, {
+          delayMs,
+          from: identity?.email,
+        })
+      : mailManager.sendSerialEmail(
+          recipients,
+          subject,
+          body,
+          identity?.sender ?? account,
+          delayMs
+        );
     const successCount = results.filter((r) => r.success).length;
     const failCount = results.length - successCount;
 
@@ -1027,6 +1309,8 @@ server.registerTool(
       ok: failCount === 0,
       sent: successCount,
       failed: failCount,
+      from: identity?.sender ?? (smtpCfg ? smtpCfg.from : account),
+      identity_id: identity?.identityId,
       results: results.map((r) => ({ email: r.email, success: r.success, error: r.error })),
     };
 
@@ -1049,11 +1333,15 @@ server.registerTool(
   "create-draft",
   {
     description:
-      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message. Select a concrete From alias with `from` after list-sending-identities; `account` remains as a backwards-compatible account/identity selector.\nReturns: the stable draft_id, actual From identity, recipients, subject, and attachment count.\nDo not use when: editing an existing draft (use update-draft) or the user wants it sent now (use send-email).\nSafety: creates and saves a draft only; it sends nothing.",
+      "Use when: composing an email the user should review in Mail.app before sending — the safe default for any new message. Select a concrete From alias with `from` after list-sending-identities. With an IMAP profile, the clean MIME draft synchronizes through the provider's Drafts mailbox and supports HTML/attachments.\nReturns: the stable draft_id, exact revision, backend, actual From identity, recipients, subject, and attachment count.\nDo not use when: editing an existing draft (use update-draft) or the user wants it sent now (use send-email).\nSafety: creates and saves a draft only; it sends nothing.",
     inputSchema: {
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       subject: z.string().min(1, "Subject is required"),
       body: z.string().min(1, "Body is required"),
+      html_body: z
+        .string()
+        .optional()
+        .describe("Optional HTML alternative; body remains the plain-text fallback"),
       cc: z.array(z.string()).optional().describe("CC recipients"),
       bcc: z.array(z.string()).optional().describe("BCC recipients"),
       from: z
@@ -1071,43 +1359,56 @@ server.registerTool(
     outputSchema: {
       ok: z.boolean().optional(),
       draft_id: z.string().optional(),
+      revision: z.string().optional(),
       from: z.string().optional(),
+      identity_id: z.string().optional(),
       recipients: z.array(z.string()).optional(),
       subject: z.string().optional(),
       attachmentCount: z.number().optional(),
+      backend: z.enum(["imap", "applescript"]).optional(),
     },
   },
-  withErrorHandling(({ to, subject, body, cc, bcc, from, account, attachments }) => {
-    if (from && account && from.toLowerCase() !== account.toLowerCase()) {
-      return errorResponse("Pass either `from` or the deprecated `account` selector, not both.");
-    }
-    const result = draftManager.createDraft({
-      to,
-      subject,
-      body,
-      cc,
-      bcc,
-      from: from ?? account,
-      attachments,
-    });
-    if (!result.success || !result.draft) {
-      return errorResponse(result.error || "Failed to create draft. Check Mail.app configuration.");
-    }
-
-    const attachmentCount = attachments?.length ?? 0;
-    const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
-    return successResponse(
-      `Draft ${result.draft.draftId} created from ${result.draft.from} for ${to.join(", ")}${attachInfo}`,
-      {
-        ok: true,
-        draft_id: result.draft.draftId,
-        from: result.draft.from,
-        recipients: to,
-        subject: result.draft.subject,
-        attachmentCount,
+  withErrorHandling(
+    async ({ to, subject, body, html_body, cc, bcc, from, account, attachments }) => {
+      if (from && account && from.toLowerCase() !== account.toLowerCase()) {
+        return errorResponse("Pass either `from` or the deprecated `account` selector, not both.");
       }
-    );
-  }, "Error creating draft")
+      const result = await draftManager.createDraft({
+        to,
+        subject,
+        body,
+        htmlBody: html_body,
+        cc,
+        bcc,
+        from: from ?? account,
+        attachments,
+      });
+      if (!result.success || !result.draft) {
+        return errorResponse(
+          result.error || "Failed to create draft. Check Mail.app configuration."
+        );
+      }
+
+      const attachmentCount = attachments?.length ?? 0;
+      const actualIdentity = draftManager.resolveIdentity(result.draft.from);
+      const attachInfo = attachmentCount ? ` with ${attachmentCount} attachment(s)` : "";
+      return successResponse(
+        `Draft ${result.draft.draftId} created from ${result.draft.from} for ${to.join(", ")}${attachInfo}`,
+        {
+          ok: true,
+          draft_id: result.draft.draftId,
+          revision: result.draft.revision,
+          from: result.draft.from,
+          identity_id: actualIdentity?.identityId,
+          recipients: to,
+          subject: result.draft.subject,
+          attachmentCount,
+          backend: result.draft.backend ?? "applescript",
+        }
+      );
+    },
+    "Error creating draft"
+  )
 );
 
 // --- list-drafts ---
@@ -1125,8 +1426,8 @@ server.registerTool(
       count: z.number().optional(),
     },
   },
-  withErrorHandling(({ limit = 50 }) => {
-    const result = draftManager.listDrafts();
+  withErrorHandling(async ({ limit = 50 }) => {
+    const result = await draftManager.listDrafts();
     if (!result.success) return errorResponse(result.error || "Failed to list drafts.");
     const activeByDraft = new Map(
       scheduledSendManager
@@ -1136,6 +1437,7 @@ server.registerTool(
     );
     const drafts = (result.drafts ?? []).slice(0, limit).map((draft) => ({
       draft_id: draft.draftId,
+      revision: draft.revision,
       from: draft.from,
       to: draft.to,
       cc: draft.cc,
@@ -1143,6 +1445,9 @@ server.registerTool(
       subject: draft.subject,
       body_preview: draft.body.slice(0, 240),
       has_attachments: draft.hasAttachments,
+      attachments: draft.attachments,
+      backend: draft.backend ?? "applescript",
+      delivery_state: draft.deliveryState,
       visible: draft.visible,
       scheduled_send: activeByDraft.has(draft.draftId)
         ? {
@@ -1177,20 +1482,25 @@ server.registerTool(
       draft: z.object({}).passthrough().optional(),
     },
   },
-  withErrorHandling(({ draft_id }) => {
-    const result = draftManager.getDraft(draft_id);
+  withErrorHandling(async ({ draft_id }) => {
+    const result = await draftManager.getDraft(draft_id);
     if (!result.success || !result.draft) {
       return errorResponse(result.error || `Draft "${draft_id}" was not found.`);
     }
     const draft = {
       draft_id: result.draft.draftId,
+      revision: result.draft.revision,
       from: result.draft.from,
       to: result.draft.to,
       cc: result.draft.cc,
       bcc: result.draft.bcc,
       subject: result.draft.subject,
       body: result.draft.body,
+      html_body: result.draft.htmlBody,
       has_attachments: result.draft.hasAttachments,
+      attachments: result.draft.attachments,
+      backend: result.draft.backend ?? "applescript",
+      delivery_state: result.draft.deliveryState,
       visible: result.draft.visible,
       scheduled_send: (() => {
         const job = scheduledSendManager.activeForDraft(result.draft.draftId);
@@ -1213,9 +1523,13 @@ server.registerTool(
   "update-draft",
   {
     description:
-      "Use when: editing an existing Apple Mail draft in place, selected by draft_id from list-drafts. Omitted fields are preserved; empty recipient arrays explicitly clear that recipient class. Mail's scripting bridge cannot safely recreate attached drafts, so update-draft refuses them instead of losing attachments.\nReturns: the same stable draft_id and the complete updated draft.\nDo not use when: creating a new draft (use create-draft), or when has_attachments is true (edit that draft in Mail.app).\nSafety: updates a saved draft only and sends nothing.",
+      "Use when: editing an existing Apple Mail draft in place, selected by draft_id from read-draft. Pass the reviewed revision as expected_revision to prevent overwriting a newer Mail.app/iPhone edit. Omitted fields and attachments are preserved; empty recipient arrays clear that class; IMAP-backed drafts support HTML plus attachment add/remove.\nReturns: the same stable draft_id, a new exact revision, backend, attachment metadata, and the complete updated draft.\nDo not use when: creating a new draft (use create-draft). Older AppleScript-backed attached drafts remain read-only; create an IMAP-backed replacement.\nSafety: updates a saved draft only and sends nothing.",
     inputSchema: {
       draft_id: z.string().regex(DRAFT_ID_PATTERN, "Invalid Apple Mail draft id"),
+      expected_revision: z
+        .string()
+        .optional()
+        .describe("Revision returned by read-draft; rejects stale edits when the draft changed"),
       from: z
         .string()
         .optional()
@@ -1227,39 +1541,96 @@ server.registerTool(
       bcc: z.array(z.string()).optional(),
       subject: z.string().optional(),
       body: z.string().optional(),
+      html_body: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("Set HTML alternative; pass null to remove it"),
+      attachments_to_add: ATTACHMENTS_SCHEMA,
+      attachment_names_to_remove: z
+        .array(z.string().min(1))
+        .max(20)
+        .optional()
+        .describe("Remove every attachment with one of these exact filenames"),
     },
     outputSchema: {
       ok: z.boolean().optional(),
       draft: z.object({}).passthrough().optional(),
     },
   },
-  withErrorHandling(({ draft_id, from, to, cc, bcc, subject, body }) => {
-    if ([from, to, cc, bcc, subject, body].every((field) => field === undefined)) {
-      return errorResponse("No draft fields were provided to update.");
-    }
-    const scheduled = scheduledSendManager.activeForDraft(draft_id);
-    if (scheduled) {
-      return errorResponse(
-        `Draft "${draft_id}" is scheduled for ${scheduled.requestedSendAt}. Cancel schedule ${scheduled.scheduleId} before editing it.`
-      );
-    }
-    const result = draftManager.updateDraft(draft_id, { from, to, cc, bcc, subject, body });
-    if (!result.success || !result.draft) {
-      return errorResponse(result.error || `Failed to update draft "${draft_id}".`);
-    }
-    const draft = {
-      draft_id: result.draft.draftId,
-      from: result.draft.from,
-      to: result.draft.to,
-      cc: result.draft.cc,
-      bcc: result.draft.bcc,
-      subject: result.draft.subject,
-      body: result.draft.body,
-      has_attachments: result.draft.hasAttachments,
-      visible: result.draft.visible,
-    };
-    return successResponse(`Draft "${draft.subject}" updated in place.`, { ok: true, draft });
-  }, "Error updating draft")
+  withErrorHandling(
+    async ({
+      draft_id,
+      expected_revision,
+      from,
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      html_body,
+      attachments_to_add,
+      attachment_names_to_remove,
+    }) => {
+      if (
+        [
+          from,
+          to,
+          cc,
+          bcc,
+          subject,
+          body,
+          html_body,
+          attachments_to_add,
+          attachment_names_to_remove,
+        ].every((field) => field === undefined)
+      ) {
+        return errorResponse("No draft fields were provided to update.");
+      }
+      const scheduled = scheduledSendManager.activeForDraft(draft_id);
+      if (scheduled) {
+        return errorResponse(
+          `Draft "${draft_id}" is scheduled for ${scheduled.requestedSendAt}. Cancel schedule ${scheduled.scheduleId} before editing it.`
+        );
+      }
+      const result = await draftManager.updateDraft(draft_id, {
+        expectedRevision: expected_revision,
+        from,
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        htmlBody: html_body,
+        attachmentsToAdd: attachments_to_add,
+        attachmentNamesToRemove: attachment_names_to_remove,
+      });
+      if (!result.success || !result.draft) {
+        return errorResponse(result.error || `Failed to update draft "${draft_id}".`);
+      }
+      const draft = {
+        draft_id: result.draft.draftId,
+        revision: result.draft.revision,
+        from: result.draft.from,
+        to: result.draft.to,
+        cc: result.draft.cc,
+        bcc: result.draft.bcc,
+        subject: result.draft.subject,
+        body: result.draft.body,
+        html_body: result.draft.htmlBody,
+        has_attachments: result.draft.hasAttachments,
+        attachments: result.draft.attachments,
+        backend: result.draft.backend ?? "applescript",
+        visible: result.draft.visible,
+      };
+      const warning = result.warning ? ` Warning: ${result.warning}` : "";
+      return successResponse(`Draft "${draft.subject}" updated in place.${warning}`, {
+        ok: true,
+        draft,
+      });
+    },
+    "Error updating draft"
+  )
 );
 
 // --- send-draft ---
@@ -1268,26 +1639,34 @@ server.registerTool(
   "send-draft",
   {
     description:
-      "Use when: sending an existing Apple Mail draft after the user has reviewed it or explicitly asked to send that draft. Saved plain-text drafts are reconstructed through Mail's compose bridge; attached drafts must be sent from Mail.app to preserve their MIME structure.\nReturns: the sent draft_id, subject, actual From identity, and recipients.\nDo not use when: the user still needs to review or edit it (use read-draft/update-draft), or when has_attachments is true.\nSafety: SENDS real email immediately and cannot be unsent — require explicit confirmation of this exact draft.",
+      "Use when: sending an existing Apple Mail draft after the user reviewed it or explicitly asked to send that draft. Pass the reviewed revision as expected_revision so a later Mail.app/iPhone edit cannot be sent accidentally. IMAP-backed drafts submit that exact clean MIME through the SMTP profile authorized for the From identity, then reconcile Sent and Drafts.\nReturns: draft/revision, actual From and recipients, SMTP message id, server Sent message id, and any post-acceptance reconciliation warning.\nDo not use when: the user still needs to review or edit it (use read-draft/update-draft). Older AppleScript-backed attached drafts cannot be sent safely by the connector.\nSafety: SENDS real email immediately and cannot be unsent — require explicit confirmation of this exact draft and revision. Never automatically retry an uncertain outcome.",
     inputSchema: {
       draft_id: z.string().regex(DRAFT_ID_PATTERN, "Invalid Apple Mail draft id"),
+      expected_revision: z
+        .string()
+        .optional()
+        .describe("Revision returned by read-draft; rejects sending a stale reviewed version"),
     },
     outputSchema: {
       ok: z.boolean().optional(),
       draft_id: z.string().optional(),
+      revision: z.string().optional(),
       subject: z.string().optional(),
       from: z.string().optional(),
       recipients: z.array(z.string()).optional(),
+      smtp_message_id: z.string().optional(),
+      sent_message_id: z.string().optional(),
+      warning: z.string().optional(),
     },
   },
-  withErrorHandling(({ draft_id }) => {
+  withErrorHandling(async ({ draft_id, expected_revision }) => {
     const scheduled = scheduledSendManager.activeForDraft(draft_id);
     if (scheduled) {
       return errorResponse(
         `Draft "${draft_id}" is already scheduled for ${scheduled.requestedSendAt}. Cancel schedule ${scheduled.scheduleId} before sending it manually.`
       );
     }
-    const result = draftManager.sendDraft(draft_id);
+    const result = await draftManager.sendDraft(draft_id, expected_revision);
     if (!result.success || !result.draft) {
       return errorResponse(result.error || `Failed to send draft "${draft_id}".`);
     }
@@ -1296,12 +1675,61 @@ server.registerTool(
       {
         ok: true,
         draft_id,
+        revision: result.draft.revision,
         subject: result.draft.subject,
         from: result.draft.from,
-        recipients: result.draft.to,
+        recipients: [...result.draft.to, ...result.draft.cc, ...result.draft.bcc],
+        smtp_message_id: result.smtpMessageId,
+        sent_message_id: result.sentMessageId,
+        warning: result.warning,
       }
     );
   }, "Error sending draft")
+);
+
+// --- resolve-draft-send-status ---
+
+server.registerTool(
+  "resolve-draft-send-status",
+  {
+    description:
+      "Use when: an IMAP-backed send-draft returned an uncertain outcome/needs_review and the user has manually verified whether that exact message appears in Sent.\nReturns: the recorded resolution and Sent message id when available. This tool never submits email.\nDo not use when: SMTP returned a definite rejection, the draft is in normal draft state, or the user has not checked Sent.\nSafety: pass confirmed=true only after the user explicitly confirms `sent` or `not_sent`. Choosing sent removes the remaining Drafts copy; choosing not_sent unlocks the draft for review or a later explicit send.",
+    inputSchema: {
+      draft_id: z.string().regex(DRAFT_ID_PATTERN, "Invalid Apple Mail draft id"),
+      outcome: z.enum(["sent", "not_sent"]),
+      confirmed: z
+        .boolean()
+        .describe("True only after the user manually verified the outcome in Sent"),
+    },
+    outputSchema: {
+      ok: z.boolean().optional(),
+      draft_id: z.string().optional(),
+      outcome: z.enum(["sent", "not_sent"]).optional(),
+      sent_message_id: z.string().optional(),
+      warning: z.string().optional(),
+    },
+  },
+  withErrorHandling(async ({ draft_id, outcome, confirmed }) => {
+    if (!confirmed) {
+      return errorResponse("Manual Sent verification and explicit confirmation are required.");
+    }
+    const result = await draftManager.resolveUncertainSend(draft_id, outcome);
+    if (!result.success) {
+      return errorResponse(result.error ?? `Could not resolve send status for "${draft_id}".`);
+    }
+    return successResponse(
+      outcome === "sent"
+        ? `Draft "${draft_id}" recorded as sent; no SMTP retry occurred.`
+        : `Draft "${draft_id}" unlocked as not sent; no SMTP submission occurred.`,
+      {
+        ok: true,
+        draft_id,
+        outcome,
+        sent_message_id: result.sentMessageId,
+        warning: result.warning,
+      }
+    );
+  }, "Error resolving uncertain draft send")
 );
 
 // --- delete-draft ---
@@ -1310,7 +1738,7 @@ server.registerTool(
   "delete-draft",
   {
     description:
-      "Use when: moving one inspected Apple Mail draft to Trash by its draft_id. The connector locates the exact saved Drafts mailbox message by account, mailbox, and native message id.\nReturns: the deleted draft_id and subject.\nDo not use when: deleting ordinary mail (use delete-message).\nSafety: destructive — require explicit user confirmation of this exact draft_id after read-draft.",
+      "Use when: deleting one inspected Apple Mail draft by its draft_id. The connector locates the exact saved Drafts resource; IMAP-backed drafts are removed from the server Drafts mailbox.\nReturns: the deleted draft_id and subject.\nDo not use when: deleting ordinary mail (use delete-message).\nSafety: destructive — require explicit user confirmation of this exact draft_id after read-draft.",
     inputSchema: {
       draft_id: z.string().regex(DRAFT_ID_PATTERN, "Invalid Apple Mail draft id"),
     },
@@ -1320,14 +1748,14 @@ server.registerTool(
       subject: z.string().optional(),
     },
   },
-  withErrorHandling(({ draft_id }) => {
+  withErrorHandling(async ({ draft_id }) => {
     const scheduled = scheduledSendManager.activeForDraft(draft_id);
     if (scheduled) {
       return errorResponse(
         `Draft "${draft_id}" is scheduled for ${scheduled.requestedSendAt}. Cancel schedule ${scheduled.scheduleId} before deleting it.`
       );
     }
-    const result = draftManager.deleteDraft(draft_id);
+    const result = await draftManager.deleteDraft(draft_id);
     if (!result.success || !result.draft) {
       return errorResponse(result.error || `Failed to delete draft "${draft_id}".`);
     }
@@ -1354,7 +1782,7 @@ server.registerTool(
   "schedule-drafts",
   {
     description:
-      "Use when: the user explicitly asks to send one or more fully reviewed Apple Mail drafts at a future date/time.\nReturns: one persistent schedule_id per draft, the exact requested time, recipients, From identity, subject, and pending status.\nRequirements: send_at must be RFC 3339 with an explicit timezone offset (for example 2026-07-29T07:00:00+08:00); drafts with attachments are refused; the Mac must remain logged in, and overdue jobs run after wake/login.\nDo not use when: the user merely mentions a possible future send, has not reviewed the drafts, or wants Mail's native Send Later mailbox—the public Mail scripting API does not expose that UI feature.\nSafety: this creates a REAL FUTURE SEND. Require explicit confirmation of the exact draft_ids, recipients/content, From identity, send time, and timezone before passing confirmed=true.",
+      "Use when: the user explicitly asks to send one or more fully reviewed Apple Mail drafts at a future date/time.\nReturns: one persistent schedule_id per draft, the exact requested time, recipients, From identity, subject, and pending status.\nRequirements: send_at must be RFC 3339 with an explicit timezone offset; the Mac must remain logged in, and overdue jobs run after wake/login. IMAP-backed drafts may include HTML and attachments; older AppleScript-backed attached drafts are refused.\nDo not use when: the user merely mentions a possible future send, has not reviewed the drafts, or wants Mail's native Send Later mailbox—the public Mail scripting API does not expose that UI feature.\nSafety: this creates a REAL FUTURE SEND. Require explicit confirmation of the exact draft_ids, recipients/content, From identity, send time, and timezone before passing confirmed=true.",
     inputSchema: {
       draft_ids: z
         .array(z.string().regex(DRAFT_ID_PATTERN, "Invalid Apple Mail draft id"))
@@ -1373,13 +1801,13 @@ server.registerTool(
       count: z.number().optional(),
     },
   },
-  withErrorHandling(({ draft_ids, send_at, confirmed }) => {
+  withErrorHandling(async ({ draft_ids, send_at, confirmed }) => {
     if (!confirmed) {
       return errorResponse(
         "Explicit confirmation is required before creating a future send schedule."
       );
     }
-    const result = scheduledSendManager.scheduleDrafts(draft_ids, send_at);
+    const result = await scheduledSendManager.scheduleDrafts(draft_ids, send_at);
     if (!result.success || !result.schedules) {
       return errorResponse(result.error ?? "Failed to schedule drafts.");
     }
@@ -1530,9 +1958,17 @@ type DirectSendOutcome =
   | { sent: false; fallback: false; error: string };
 
 /** Resolve SMTP config, falling back (host/user set but no password) to Mail.app. */
-function resolveSmtpOrFallback(): SmtpConfig | null {
+function resolveSmtpOrFallback(identity?: {
+  email: string;
+  accountName: string;
+}): SmtpConfig | null {
   try {
-    return resolveSmtpConfig();
+    return identity
+      ? resolveSmtpConfigForIdentity({
+          email: identity.email,
+          account: identity.accountName,
+        })
+      : resolveSmtpConfigForIdentity();
   } catch {
     return null;
   }
@@ -1542,9 +1978,10 @@ function resolveSmtpOrFallback(): SmtpConfig | null {
 async function sendReplyViaSmtp(
   id: string,
   body: string,
-  replyAll: boolean
+  replyAll: boolean,
+  identity?: { email: string; accountName: string }
 ): Promise<DirectSendOutcome> {
-  const cfg = resolveSmtpOrFallback();
+  const cfg = resolveSmtpOrFallback(identity);
   if (!cfg) return { sent: false, fallback: true };
 
   const raw = mailManager.getRawSource(id);
@@ -1562,8 +1999,8 @@ async function sendReplyViaSmtp(
     originalPlainText: content?.plainText ?? "",
     body,
     replyAll,
-    self: [cfg.from, cfg.user],
-    from: cfg.from,
+    self: [identity?.email ?? cfg.from, cfg.from, cfg.user],
+    from: identity?.email ?? cfg.from,
   });
 
   const result = await sendViaSmtp(opts, cfg);
@@ -1575,9 +2012,10 @@ async function sendReplyViaSmtp(
 async function sendForwardViaSmtp(
   id: string,
   to: string[],
-  body: string | undefined
+  body: string | undefined,
+  identity?: { email: string; accountName: string }
 ): Promise<DirectSendOutcome> {
-  const cfg = resolveSmtpOrFallback();
+  const cfg = resolveSmtpOrFallback(identity);
   if (!cfg) return { sent: false, fallback: true };
 
   const raw = mailManager.getRawSource(id);
@@ -1590,7 +2028,7 @@ async function sendForwardViaSmtp(
     originalPlainText: content?.plainText ?? "",
     to,
     body,
-    from: cfg.from,
+    from: identity?.email ?? cfg.from,
   });
 
   const result = await sendViaSmtp(opts, cfg);
@@ -1604,10 +2042,16 @@ server.registerTool(
   "reply-to-message",
   {
     description:
-      "Use when: replying to an existing message by id, preserving its threading headers. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation that the reply was sent or saved as a draft.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and body, or pass send=false to let the user review.",
+      "Use when: replying to an existing message by id, preserving its threading headers and optionally selecting an exact From identity. Set replyAll for all recipients; set send=false to save as a draft instead of sending.\nReturns: a confirmation including the actual From identity.\nDo not use when: composing a brand-new message (use send-email / create-draft) or forwarding to new recipients (use forward-message).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the From identity, recipients, and body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       body: z.string().min(1, "Reply body is required"),
+      from: z
+        .string()
+        .optional()
+        .describe(
+          "Sending identity id, exact email address, or formatted sender from list-sending-identities"
+        ),
       replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
       send: z
         .boolean()
@@ -1619,23 +2063,34 @@ server.registerTool(
       ok: z.boolean().optional(),
       sent: z.boolean().optional(),
       id: z.string().optional(),
+      from: z.string().optional(),
+      identity_id: z.string().optional(),
     },
   },
-  withErrorHandling(async ({ id, body, replyAll, send }) => {
+  withErrorHandling(async ({ id, body, replyAll, send, from }) => {
+    const resolved = requestedSendingIdentity(from);
+    if (resolved.error) return errorResponse(resolved.error);
+    const identity = resolved.identity;
     // 2.5.0: prefer direct SMTP (clean, correctly threaded MIME) when configured
     // and actually sending. Drafts (send=false) and the not-configured /
     // unthreadable cases fall through to the Mail.app AppleScript path.
     if (send && isSmtpConfigured()) {
-      const outcome = await sendReplyViaSmtp(id, body, replyAll);
+      const outcome = await sendReplyViaSmtp(id, body, replyAll, identity);
       if (outcome.sent) {
-        return successResponse("Reply sent", { ok: true, sent: true, id });
+        return successResponse("Reply sent", {
+          ok: true,
+          sent: true,
+          id,
+          from: identity?.sender,
+          identity_id: identity?.identityId,
+        });
       }
       if (!outcome.fallback) {
         return errorResponse(`Failed to reply to message "${id}" via SMTP: ${outcome.error}`);
       }
     }
 
-    const success = mailManager.replyToMessage(id, body, replyAll, send);
+    const success = mailManager.replyToMessage(id, body, replyAll, send, identity?.sender);
 
     if (!success) {
       return errorResponse(`Failed to reply to message "${id}"`);
@@ -1645,6 +2100,8 @@ server.registerTool(
       ok: true,
       sent: send,
       id,
+      from: identity?.sender,
+      identity_id: identity?.identityId,
     });
   }, "Error replying to message")
 );
@@ -1655,11 +2112,17 @@ server.registerTool(
   "forward-message",
   {
     description:
-      "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend. Set send=false to save as a draft.\nReturns: a confirmation that the message was forwarded or saved as a draft.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the recipients and any prepended body, or pass send=false to let the user review.",
+      "Use when: forwarding an existing message (by id) to new recipients (to is an array), with an optional body to prepend and an exact From identity. Set send=false to save as a draft.\nReturns: a confirmation including the actual From identity.\nDo not use when: replying to the sender/recipients (use reply-to-message) or composing a new message (use send-email / create-draft).\nSafety: with the default send=true this SENDS real email immediately and cannot be unsent — require explicit user confirmation of the From identity, recipients, and any prepended body, or pass send=false to let the user review.",
     inputSchema: {
       id: MESSAGE_ID_SCHEMA,
       to: z.array(z.string()).min(1, "At least one recipient is required"),
       body: z.string().optional().describe("Optional message to prepend"),
+      from: z
+        .string()
+        .optional()
+        .describe(
+          "Sending identity id, exact email address, or formatted sender from list-sending-identities"
+        ),
       send: z
         .boolean()
         .optional()
@@ -1671,18 +2134,25 @@ server.registerTool(
       sent: z.boolean().optional(),
       recipients: z.array(z.string()).optional(),
       id: z.string().optional(),
+      from: z.string().optional(),
+      identity_id: z.string().optional(),
     },
   },
-  withErrorHandling(async ({ id, to, body, send }) => {
+  withErrorHandling(async ({ id, to, body, send, from }) => {
+    const resolved = requestedSendingIdentity(from);
+    if (resolved.error) return errorResponse(resolved.error);
+    const identity = resolved.identity;
     // 2.5.0: prefer direct SMTP (clean MIME) when configured and actually sending.
     if (send && isSmtpConfigured()) {
-      const outcome = await sendForwardViaSmtp(id, to, body);
+      const outcome = await sendForwardViaSmtp(id, to, body, identity);
       if (outcome.sent) {
         return successResponse(`Message forwarded to ${to.join(", ")}`, {
           ok: true,
           sent: true,
           recipients: to,
           id,
+          from: identity?.sender,
+          identity_id: identity?.identityId,
         });
       }
       if (!outcome.fallback) {
@@ -1690,7 +2160,7 @@ server.registerTool(
       }
     }
 
-    const success = mailManager.forwardMessage(id, to, body, send);
+    const success = mailManager.forwardMessage(id, to, body, send, identity?.sender);
 
     if (!success) {
       return errorResponse(`Failed to forward message "${id}"`);
@@ -1698,7 +2168,14 @@ server.registerTool(
 
     return successResponse(
       send ? `Message forwarded to ${to.join(", ")}` : "Forward saved as draft",
-      { ok: true, sent: send, recipients: to, id }
+      {
+        ok: true,
+        sent: send,
+        recipients: to,
+        id,
+        from: identity?.sender,
+        identity_id: identity?.identityId,
+      }
     );
   }, "Error forwarding message")
 );
@@ -3179,27 +3656,54 @@ server.registerTool(
   "use-template",
   {
     description:
-      "Use when: composing a new draft from a saved template (by id), optionally overriding the recipients, subject, or body. Creates a draft in Mail.app for the user to review and send.\nReturns: a confirmation that a draft was created from the template.\nDo not use when: you want to inspect the template without composing (use get-template) or send immediately without a draft (use send-email).",
+      "Use when: composing a new stable draft from a saved template (by id), optionally overriding the From identity, recipients, subject, or body. Creates a draft in Mail.app for the user to review and send.\nReturns: the stable draft_id and actual From identity.\nDo not use when: you want to inspect the template without composing (use get-template) or send immediately without a draft (use send-email).",
     inputSchema: {
       id: z.string().min(1, "Template ID is required"),
       to: z.array(z.string()).optional().describe("Override recipients"),
       cc: z.array(z.string()).optional().describe("Override CC recipients"),
       subject: z.string().optional().describe("Override subject"),
       body: z.string().optional().describe("Override body"),
+      from: z
+        .string()
+        .optional()
+        .describe(
+          "Sending identity id, exact email address, or formatted sender from list-sending-identities"
+        ),
     },
     outputSchema: {
       ok: z.boolean().optional(),
       id: z.string().optional(),
+      draft_id: z.string().optional(),
+      from: z.string().optional(),
+      identity_id: z.string().optional(),
     },
   },
-  withErrorHandling(({ id, to, cc, subject, body }) => {
-    const success = mailManager.useTemplate(id, { to, cc, subject, body });
-
-    if (!success) {
-      return errorResponse(`Failed to use template "${id}". Template not found or no recipients.`);
+  withErrorHandling(async ({ id, to, cc, subject, body, from }) => {
+    const template = mailManager.getTemplate(id);
+    if (!template) return errorResponse(`Template "${id}" not found.`);
+    const recipients = to ?? template.to ?? [];
+    if (recipients.length === 0) {
+      return errorResponse(`Template "${id}" has no recipients; pass at least one address in to.`);
     }
-
-    return successResponse(`Draft created from template "${id}"`, { ok: true, id });
+    const resolved = requestedSendingIdentity(from);
+    if (resolved.error) return errorResponse(resolved.error);
+    const result = await draftManager.createDraft({
+      from: resolved.identity?.identityId,
+      to: recipients,
+      cc: cc ?? template.cc,
+      subject: subject ?? template.subject,
+      body: body ?? template.body,
+    });
+    if (!result.success || !result.draft) {
+      return errorResponse(result.error ?? `Failed to create a draft from template "${id}".`);
+    }
+    return successResponse(`Draft created from template "${id}"`, {
+      ok: true,
+      id,
+      draft_id: result.draft.draftId,
+      from: result.draft.from,
+      identity_id: resolved.identity?.identityId,
+    });
   }, "Error using template")
 );
 

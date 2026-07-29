@@ -3,15 +3,16 @@
 `apple-mail-mcp` works out of the box over AppleScript with no configuration. The
 **IMAP backend is opt-in** and makes the server talk to your mail provider
 directly for the operations where that's faster and more reliable than driving
-Mail.app — most importantly **search, counts, and large mailboxes**, where
-AppleScript times out. Configuring **SMTP** additionally lets the server send
-clean MIME (avoiding the macOS 15+ Mail.app `<blockquote>` wrapping).
+Mail.app — including synchronized MIME drafts, search, counts, and large
+mailboxes. Configuring **SMTP** additionally lets the server send clean MIME
+(avoiding the macOS 15+ Mail.app `<blockquote>` wrapping).
 
 This is **additive and per-account**: any account you don't configure for IMAP
 keeps using AppleScript exactly as before. You can mix — e.g. Gmail over IMAP,
 everything else over AppleScript.
 
 > **TL;DR**
+>
 > 1. Generate an **app-specific password** at your mail provider.
 > 2. Store it in the **macOS Keychain** (the server reads it from there — it
 >    never goes in any config file).
@@ -25,17 +26,18 @@ everything else over AppleScript.
 
 When an account is IMAP-configured, these route to IMAP (otherwise AppleScript):
 
-| Capability | Tools |
-|------------|-------|
-| Server-side search / list | `search-messages`, `list-messages` |
-| Read a message | `get-message` |
-| Message mutations | `mark-as-read`/`unread`, `flag`/`unflag-message`, `move-message`, `delete-message` |
-| Batch mutations | `batch-mark-as-read`/`unread`, `batch-flag`/`unflag-messages`, `batch-move-messages`, `batch-delete-messages` |
-| Folder ops | `create-mailbox`, `rename-mailbox`, `delete-mailbox` |
-| Counts & stats | `get-unread-count`, `list-mailboxes`, `get-mail-stats` |
-| Attachments | `list-attachments`, `save-attachment`, `fetch-attachment` |
-| Threading | `get-thread` |
-| New-mail push | IMAP IDLE notifications (opt-in) |
+| Capability                | Tools                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Synchronized MIME drafts  | `create-draft`, `list-drafts`, `read-draft`, `update-draft`, `send-draft`, `delete-draft`, scheduled sends    |
+| Server-side search / list | `search-messages`, `list-messages`                                                                            |
+| Read a message            | `get-message`                                                                                                 |
+| Message mutations         | `mark-as-read`/`unread`, `flag`/`unflag-message`, `move-message`, `delete-message`                            |
+| Batch mutations           | `batch-mark-as-read`/`unread`, `batch-flag`/`unflag-messages`, `batch-move-messages`, `batch-delete-messages` |
+| Folder ops                | `create-mailbox`, `rename-mailbox`, `delete-mailbox`                                                          |
+| Counts & stats            | `get-unread-count`, `list-mailboxes`, `get-mail-stats`                                                        |
+| Attachments               | `list-attachments`, `save-attachment`, `fetch-attachment`                                                     |
+| Threading                 | `get-thread`                                                                                                  |
+| New-mail push             | IMAP IDLE notifications (opt-in)                                                                              |
 
 ---
 
@@ -68,7 +70,7 @@ Use an **app-specific password**, never your real account password. Where to get
   provider's security settings.
 
 > **iCloud gotcha — Apple ID vs IMAP login.** Your **Apple ID** (what you sign in
-> to account.apple.com with, possibly a Gmail address) is *not* your IMAP login.
+> to account.apple.com with, possibly a Gmail address) is _not_ your IMAP login.
 > The IMAP **username** is your iCloud mailbox address, e.g. `you@icloud.com`
 > (or a `@me.com` alias). The app password is generated under the Apple ID but
 > authenticates the iCloud mailbox login. Also note an iCloud app password only
@@ -122,14 +124,14 @@ Code** via `~/.claude.json`, and most standard `mcpServers` configs).
         "APPLE_MAIL_MCP_IMAP_ACCOUNT": "you@gmail.com",
         "APPLE_MAIL_MCP_IMAP_HOST": "imap.gmail.com",
         "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE": "imap.gmail.com",
-        "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT": "you@gmail.com"
-      }
-    }
-  }
+        "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT": "you@gmail.com",
+      },
+    },
+  },
 }
 ```
 
-### Method B — `config.json` file (for hosts that strip `env`)  *(v2.1.1+)*
+### Method B — `config.json` file (for hosts that strip `env`) _(v2.1.1+)_
 
 Some host apps (notably **Claude Desktop**) launch MCP servers with a **scrubbed
 environment and ignore the `env` block**, so Method A silently does nothing
@@ -255,6 +257,7 @@ block — switch to the `config.json` method (Method B) and confirm the file is 
 `APPLE_MAIL_MCP_CONFIG_FILE` points). Verify it parses: `python3 -m json.tool < <path>`.
 
 **`doctor` says "connection failed" for an account.**
+
 - The Keychain item is missing or under a different service/account. Check:
   `security find-internet-password -s imap.gmail.com -a you@gmail.com` (should
   return without "could not be found"). It must match your `KEYCHAIN_SERVICE` /
@@ -266,7 +269,7 @@ block — switch to the `config.json` method (Method B) and confirm the file is 
   app password isn't available for that account.
 
 **Storing the Keychain password over SSH / headless fails with `User interaction is not allowed`.**
-`security add-internet-password` — and the server *reading* the password back —
+`security add-internet-password` — and the server _reading_ the password back —
 need the login Keychain **unlocked**, which normally only happens in a **GUI login
 session**. From a plain `ssh` session the Keychain is locked, so the write fails
 with `SecKeychainAddInternetPassword: User interaction is not allowed` (exit 36),
@@ -278,7 +281,7 @@ and a server started there can't read passwords either. Options:
   — the `-t` lets `unlock-keychain` prompt for your macOS **login** password, after
   which the add (and later server reads) succeed. A metadata check —
   `security find-internet-password -s … -a …` with no `-w` — does work over plain
-  ssh, so you can confirm an item *exists* even when you can't unlock it.
+  ssh, so you can confirm an item _exists_ even when you can't unlock it.
 - **Truly headless** (CI, or a server with no GUI login and no unlockable Keychain):
   skip the Keychain — set `APPLE_MAIL_MCP_SMTP_PASSWORD` / `APPLE_MAIL_MCP_IMAP_PASSWORD`
   (or a per-account `"password"` inside `APPLE_MAIL_MCP_IMAP_ACCOUNTS`) directly, and
@@ -298,8 +301,8 @@ GUI is ignoring.
 ## Security notes
 
 - **Passwords live only in the macOS Keychain.** No config file or env value
-  here holds a secret — only account names, hosts, and Keychain *references*.
-  (You *can* put a `password` directly in config, but don't.)
+  here holds a secret — only account names, hosts, and Keychain _references_.
+  (You _can_ put a `password` directly in config, but don't.)
 - Use **app-specific passwords** so you can revoke access per-integration without
   changing your real password.
 - The `config.json` and env values are non-sensitive (addresses/hosts), but
@@ -309,26 +312,27 @@ GUI is ignoring.
 
 ## Full environment variable reference
 
-| Variable | Purpose |
-|----------|---------|
-| `APPLE_MAIL_MCP_DEFAULT_ACCOUNT` | Account used when a tool omits `account` (name or email). |
-| `APPLE_MAIL_MCP_IMAP_USER` | Primary IMAP login; setting it enables IMAP. |
-| `APPLE_MAIL_MCP_IMAP_ACCOUNT` | Mail.app account name to match for routing (default = USER). |
-| `APPLE_MAIL_MCP_IMAP_HOST` | IMAP host (default `imap.gmail.com`). |
-| `APPLE_MAIL_MCP_IMAP_PORT` | IMAP port (default `993`, implicit TLS). |
-| `APPLE_MAIL_MCP_IMAP_PASSWORD` | Password (discouraged; prefer Keychain). |
-| `APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE` | Keychain item service/server name. |
-| `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT` | Keychain item account (default = USER). |
-| `APPLE_MAIL_MCP_IMAP_ACCOUNTS` | JSON array of additional accounts (multi-account). |
-| `APPLE_MAIL_MCP_IMAP_IDLE` | `1` to enable IMAP IDLE new-mail push. |
-| `APPLE_MAIL_MCP_IMAP_IDLE_MS` | Pooled-connection idle timeout in ms (default `30000`; `0` = never close). |
-| `APPLE_MAIL_MCP_SMTP_HOST` | SMTP host; setting it enables `transport:"smtp"`. |
-| `APPLE_MAIL_MCP_SMTP_PORT` | SMTP port (`465` if secure, else `587`). |
-| `APPLE_MAIL_MCP_SMTP_SECURE` | `true` for implicit TLS (465); else STARTTLS. |
-| `APPLE_MAIL_MCP_SMTP_USER` / `_FROM` | SMTP login / From address. |
-| `APPLE_MAIL_MCP_SMTP_PASSWORD` | Password (discouraged; prefer Keychain). |
-| `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` / `_KEYCHAIN_ACCOUNT` | SMTP Keychain reference. |
-| `APPLE_MAIL_MCP_CONFIG_FILE` | Path to the config JSON (default app-support dir). |
-| `APPLE_MAIL_MCP_TEMPLATES_FILE` | Email-templates store path (default `~/Library/Application Support/apple-mail-mcp/templates.json`). |
-| `APPLE_MAIL_MCP_MAX_BUFFER` | Max AppleScript (`osascript`) output buffer in bytes (default 64 MiB). |
-| `APPLE_MAIL_MAX_SEARCH_MAILBOX` | Per-mailbox message-count guard for unscoped AppleScript search (default `5000`; `0` disables). Note: no `_MCP` in the name. |
+| Variable                                                     | Purpose                                                                                                                      |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_MAIL_MCP_DEFAULT_ACCOUNT`                             | Account used when a tool omits `account` (name or email).                                                                    |
+| `APPLE_MAIL_MCP_IMAP_USER`                                   | Primary IMAP login; setting it enables IMAP.                                                                                 |
+| `APPLE_MAIL_MCP_IMAP_ACCOUNT`                                | Mail.app account name to match for routing (default = USER).                                                                 |
+| `APPLE_MAIL_MCP_IMAP_HOST`                                   | IMAP host (default `imap.gmail.com`).                                                                                        |
+| `APPLE_MAIL_MCP_IMAP_PORT`                                   | IMAP port (default `993`, implicit TLS).                                                                                     |
+| `APPLE_MAIL_MCP_IMAP_PASSWORD`                               | Password (discouraged; prefer Keychain).                                                                                     |
+| `APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE`                       | Keychain item service/server name.                                                                                           |
+| `APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT`                       | Keychain item account (default = USER).                                                                                      |
+| `APPLE_MAIL_MCP_IMAP_ACCOUNTS`                               | JSON array of additional accounts (multi-account).                                                                           |
+| `APPLE_MAIL_MCP_IMAP_IDLE`                                   | `1` to enable IMAP IDLE new-mail push.                                                                                       |
+| `APPLE_MAIL_MCP_IMAP_IDLE_MS`                                | Pooled-connection idle timeout in ms (default `30000`; `0` = never close).                                                   |
+| `APPLE_MAIL_MCP_SMTP_HOST`                                   | SMTP host; setting it enables `transport:"smtp"`.                                                                            |
+| `APPLE_MAIL_MCP_SMTP_PORT`                                   | SMTP port (`465` if secure, else `587`).                                                                                     |
+| `APPLE_MAIL_MCP_SMTP_SECURE`                                 | `true` for implicit TLS (465); else STARTTLS.                                                                                |
+| `APPLE_MAIL_MCP_SMTP_USER` / `_FROM`                         | SMTP login / From address.                                                                                                   |
+| `APPLE_MAIL_MCP_SMTP_PASSWORD`                               | Password (discouraged; prefer Keychain).                                                                                     |
+| `APPLE_MAIL_MCP_SMTP_KEYCHAIN_SERVICE` / `_KEYCHAIN_ACCOUNT` | SMTP Keychain reference.                                                                                                     |
+| `APPLE_MAIL_MCP_SMTP_ACCOUNTS`                               | JSON array of per-account/alias SMTP profiles. Each selected From identity must match one authorized profile.                |
+| `APPLE_MAIL_MCP_CONFIG_FILE`                                 | Path to the config JSON (default app-support dir).                                                                           |
+| `APPLE_MAIL_MCP_TEMPLATES_FILE`                              | Email-templates store path (default `~/Library/Application Support/apple-mail-mcp/templates.json`).                          |
+| `APPLE_MAIL_MCP_MAX_BUFFER`                                  | Max AppleScript (`osascript`) output buffer in bytes (default 64 MiB).                                                       |
+| `APPLE_MAIL_MAX_SEARCH_MAILBOX`                              | Per-mailbox message-count guard for unscoped AppleScript search (default `5000`; `0` disables). Note: no `_MCP` in the name. |
