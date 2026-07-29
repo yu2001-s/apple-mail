@@ -10,11 +10,6 @@ identities, confirmation-gated sending, and persistent scheduled sends.
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![MCP](https://img.shields.io/badge/MCP-server-blue)](https://modelcontextprotocol.io)
 
-This repository is independent on GitHub and does not retain another
-repository's Git history. The implementation is derived from Rob Sweet's
-MIT-licensed `apple-mail-mcp`; the original copyright and license notice are
-preserved in [LICENSE](./LICENSE).
-
 ## What is This?
 
 This server acts as a local bridge between Codex and Apple Mail. Once
