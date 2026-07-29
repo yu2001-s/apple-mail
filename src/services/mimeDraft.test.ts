@@ -49,4 +49,18 @@ describe("draft MIME composition", () => {
     expect(deliverable).not.toMatch(/^X-Apple-Mail-Plugin-Draft-ID:/im);
     expect(deliverable).toContain("Body");
   });
+
+  it("round-trips long subjects split across adjacent encoded words", async () => {
+    const subject = "[Apple Mail Plugin Test] Edited draft + SMTP send — 2026-07-29";
+    const raw = await composeDraftMime({
+      draftUuid: "00000000-0000-4000-8000-000000000001",
+      from: "sender@example.com",
+      to: ["to@example.com"],
+      subject,
+      body: "Body",
+    });
+
+    expect(raw.toString()).toMatch(/Subject: =\?UTF-8\?Q\?.+\r?\n =\?UTF-8\?Q\?/);
+    expect(parseDraftMime(raw).subject).toBe(subject);
+  });
 });

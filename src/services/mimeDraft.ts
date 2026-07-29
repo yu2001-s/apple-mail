@@ -54,7 +54,12 @@ function splitHeaderBody(raw: string): { headers: string; body: string } {
 }
 
 function decodeHeaderWord(value: string): string {
-  return value.replace(
+  // RFC 2047 says linear whitespace between adjacent encoded-words is only
+  // folding whitespace and must not appear in the decoded value. Nodemailer
+  // splits long subjects at arbitrary byte boundaries, so preserving that
+  // whitespace can turn "draft" into "draf t".
+  const withoutEncodedWordFolding = value.replace(/(\?=)[ \t\r\n]+(?==\?)/g, "$1");
+  return withoutEncodedWordFolding.replace(
     /=\?([^?]+)\?([bq])\?([^?]+)\?=/gi,
     (_whole, charset: string, encoding: string, encoded: string) => {
       try {

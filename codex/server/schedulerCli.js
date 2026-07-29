@@ -56250,7 +56250,8 @@ function splitHeaderBody(raw) {
   return { headers: raw.slice(0, index), body: raw.slice(index + separator.length) };
 }
 function decodeHeaderWord(value) {
-  return value.replace(
+  const withoutEncodedWordFolding = value.replace(/(\?=)[ \t\r\n]+(?==\?)/g, "$1");
+  return withoutEncodedWordFolding.replace(
     /=\?([^?]+)\?([bq])\?([^?]+)\?=/gi,
     (_whole, charset, encoding, encoded) => {
       try {
