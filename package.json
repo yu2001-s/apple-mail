@@ -65,27 +65,27 @@
     "darwin"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "imapflow": "^1.4.1",
-    "nodemailer": "^9.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "imapflow": "^1.7.1",
+    "nodemailer": "^9.0.5",
     "zod": "^3.22.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "@types/node": "^20.0.0",
     "@types/nodemailer": "^8.0.1",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.67.0",
+    "@typescript-eslint/parser": "^8.67.0",
     "@vitest/coverage-v8": "^4.1.9",
-    "esbuild": "^0.28.1",
+    "esbuild": "^0.28.2",
     "eslint": "^9.0.0",
-    "globals": "^17.0.0",
+    "globals": "^17.11.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "prettier": "^3.0.0",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.0.0",
-    "typescript-eslint": "^8.51.0",
+    "typescript-eslint": "^8.67.0",
     "vitest": "^4.1.9"
   },
   "volta": {
