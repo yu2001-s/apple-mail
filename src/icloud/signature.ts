@@ -87,6 +87,7 @@ export function withSignature<T extends MailBody>(
   const signature = signatureFor(preferences, mail.from ?? defaultFrom);
   if (!includeSignature || !signature?.trim()) return mail;
   if (typeof mail.body === "string") mail.body = plainSignature(mail.body, signature);
-  if (typeof mail.htmlBody === "string") mail.htmlBody = htmlSignature(mail.htmlBody, signature);
+  // An empty HTML body asks for no HTML part; leave it empty.
+  if (mail.htmlBody) mail.htmlBody = htmlSignature(mail.htmlBody, signature);
   return mail;
 }

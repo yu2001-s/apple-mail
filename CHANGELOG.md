@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Accept `null` for optional tool arguments, as strict-mode clients such as
+  ChatGPT send; `update_draft` now removes the HTML part only for an empty
+  `htmlBody` string.
+- Drop the repository plugin marketplaces in favour of the account-level
+  Worker connector; the plugin directory still loads with `--plugin-dir`.
+
 ## 1.3.0 — 2026-10-01
 
 - Package the connector as a Claude Code plugin with a repository

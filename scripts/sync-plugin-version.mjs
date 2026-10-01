@@ -12,10 +12,6 @@ update("plugins/icloud-mail/.codex-plugin/plugin.json", (data) => {
 update("plugins/icloud-mail/.claude-plugin/plugin.json", (data) => {
   data.version = version;
 });
-for (const catalog of [".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"])
-  update(catalog, (data) => {
-    for (const plugin of data.plugins) if (plugin.name === "icloud-mail") plugin.version = version;
-  });
 // wrangler.jsonc has comments, so its version is replaced textually.
 {
   const filename = path.join(root, "wrangler.jsonc");

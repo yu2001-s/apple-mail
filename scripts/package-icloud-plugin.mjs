@@ -9,20 +9,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const target = join(root, "plugins/icloud-mail");
 const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const manifest = JSON.parse(readFileSync(join(target, ".codex-plugin/plugin.json"), "utf8"));
-const catalog = JSON.parse(readFileSync(join(root, ".agents/plugins/marketplace.json"), "utf8"));
-assert.equal(manifest.version, version, "Run node scripts/sync-plugin-version.mjs");
-assert.equal(catalog.plugins.length, 1, "Only the iCloud connector belongs in this marketplace");
-assert.equal(catalog.plugins[0].name, manifest.name);
-assert.equal(catalog.plugins[0].version, version);
-for (const [file, entries] of [
-  [".claude-plugin/plugin.json", (data) => [data]],
-  ["../../.claude-plugin/marketplace.json", (data) => data.plugins],
-]) {
-  const data = JSON.parse(readFileSync(join(target, file), "utf8"));
-  for (const entry of entries(data)) {
-    assert.equal(entry.name, manifest.name, `${file} must describe ${manifest.name}`);
-    assert.equal(entry.version, version, "Run node scripts/sync-plugin-version.mjs");
-  }
+const claudeManifest = JSON.parse(readFileSync(join(target, ".claude-plugin/plugin.json"), "utf8"));
+for (const entry of [manifest, claudeManifest]) {
+  assert.equal(entry.name, "icloud-mail");
+  assert.equal(entry.version, version, "Run node scripts/sync-plugin-version.mjs");
 }
 mkdirSync(join(target, "server"), { recursive: true });
 const result = await build({

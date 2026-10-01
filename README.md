@@ -9,22 +9,26 @@ bundle runs several ways:
 
 | Where | How | Guide |
 | --- | --- | --- |
-| Claude Code, on each Mac | Plugin from this repository's marketplace | below |
-| Codex | Personal Codex Plugin | below |
-| Claude and ChatGPT on every device | Cloudflare Worker with OAuth | [docs/WORKER.md](docs/WORKER.md) |
+| Claude and ChatGPT on every device | Cloudflare Worker, added once per account | [docs/WORKER.md](docs/WORKER.md) |
 | Same, on your own machine | Remote MCP server with OAuth | [docs/REMOTE.md](docs/REMOTE.md) |
+| Codex, locally | Personal Codex Plugin | below |
+| Claude Code, locally | Plugin directory | below |
 
-## Install in Claude Code
+The Worker is the recommended setup: a connector added to a Claude or ChatGPT
+account works in every app and device signed in to it, with nothing to
+install per machine.
+
+## Run locally in Claude Code
+
+For development, load the plugin directory directly:
 
 ```sh
-claude plugin marketplace add yu2001-s/apple-mail
-claude plugin install icloud-mail@icloud-mail
+claude --plugin-dir plugins/icloud-mail
 ```
 
-Repeat on each machine; `claude plugin marketplace update icloud-mail` picks up
-new releases. The plugin starts the server through `server/launch.sh`, which
-finds Node.js 20+ in `PATH` or the usual Homebrew, Volta and nvm locations
-(`ICLOUD_MAIL_NODE` selects one explicitly). Each machine needs the account
+The plugin starts the server through `server/launch.sh`, which finds Node.js
+20+ in `PATH` or the usual Homebrew, Volta and nvm locations
+(`ICLOUD_MAIL_NODE` selects one explicitly). It needs the account
 configuration described in [docs/IMAP-SETUP.md](docs/IMAP-SETUP.md).
 
 ## Install in Codex

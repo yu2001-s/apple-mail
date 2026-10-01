@@ -199,6 +199,15 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       })
     ).json();
     assert.equal(JSON.parse(signature.result.content[0].text).from, sender);
+    const nulled = await (
+      await rpc(tokens.access_token, {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "get_signature", arguments: { from: null } },
+      })
+    ).json();
+    assert.ok(!nulled.result.isError, JSON.stringify(nulled));
   } finally {
     child.kill();
     await new Promise((resolve) => {

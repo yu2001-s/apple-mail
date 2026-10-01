@@ -103,6 +103,17 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
     const result = await request(3, "tools/call", { name: "get_signature", arguments: {} });
     assert(!result.isError);
     assert.equal(JSON.parse(result.content[0].text).signature, signature);
+    // Strict-mode clients (ChatGPT) send null for unset optional arguments.
+    const nulled = await request(4, "tools/call", {
+      name: "get_signature",
+      arguments: { from: null },
+    });
+    assert(!nulled.isError, JSON.stringify(nulled));
+    assert.equal(JSON.parse(nulled.content[0].text).from, sender);
+    const read = tools.find((tool) => tool.name === "read_message").inputSchema;
+    assert.deepEqual(read.required, ["id"]);
+    assert.equal(read.properties.maxBodyChars.type, "integer");
+    assert.equal(read.properties.maxBodyChars.default, 30000);
   } finally {
     lines.close();
     child.kill();

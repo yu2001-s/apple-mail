@@ -98358,7 +98358,7 @@ function withSignature(input, preferences, defaultFrom) {
   const signature = signatureFor(preferences, mail.from ?? defaultFrom);
   if (!includeSignature || !signature?.trim()) return mail;
   if (typeof mail.body === "string") mail.body = plainSignature(mail.body, signature);
-  if (typeof mail.htmlBody === "string") mail.htmlBody = htmlSignature(mail.htmlBody, signature);
+  if (mail.htmlBody) mail.htmlBody = htmlSignature(mail.htmlBody, signature);
   return mail;
 }
 
@@ -98373,13 +98373,21 @@ function createMcpServer(ctx2, options = {}) {
     }
   );
   const register = server.registerTool;
+  function nullAsAbsent(shape) {
+    return Object.fromEntries(
+      Object.entries(shape).map(([key, schema]) => [
+        key,
+        schema.isOptional() ? external_exports.preprocess((value) => value ?? void 0, schema) : schema
+      ])
+    );
+  }
   function tool(name, description, inputSchema, readOnly, fn) {
     register.call(
       server,
       name,
       {
         description,
-        inputSchema,
+        inputSchema: nullAsAbsent(inputSchema),
         annotations: {
           readOnlyHint: readOnly,
           destructiveHint: false,
@@ -98717,7 +98725,7 @@ function createMcpServer(ctx2, options = {}) {
       bcc: emails.optional(),
       subject: external_exports.string().optional(),
       body: external_exports.string().optional(),
-      htmlBody: external_exports.string().nullable().optional(),
+      htmlBody: external_exports.string().optional().describe("Replacement HTML body. An empty string removes the HTML part."),
       attachmentsToAdd: attachments,
       attachmentNamesToRemove: external_exports.array(external_exports.string()).optional(),
       includeSignature
@@ -98725,7 +98733,7 @@ function createMcpServer(ctx2, options = {}) {
     false,
     async ({ draftId, ...update }) => {
       let sender = update.from ?? defaultFrom;
-      if (!update.from && update.includeSignature !== false && (update.body !== void 0 || typeof update.htmlBody === "string")) {
+      if (!update.from && update.includeSignature !== false && (update.body !== void 0 || update.htmlBody)) {
         const current = await drafts.getDraft(draftId);
         if (!current.success || !current.draft) return current;
         sender = current.draft.from;

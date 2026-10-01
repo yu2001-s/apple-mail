@@ -6,11 +6,12 @@ its source and bundled dependencies. Mail.app and AppleScript are not required.
 
 ## Install and update
 
-In Claude Code:
+For Claude and ChatGPT on every device, prefer the account-level Worker
+connector in [docs/WORKER.md](../../docs/WORKER.md). To load this plugin in
+Claude Code for development:
 
 ```sh
-claude plugin marketplace add yu2001-s/apple-mail
-claude plugin install icloud-mail@icloud-mail
+claude --plugin-dir plugins/icloud-mail
 ```
 
 In Codex, from the repository root:
@@ -66,7 +67,6 @@ the plugin while preserving mail data:
 
 ```sh
 codex plugin remove icloud-mail@personal
-claude plugin uninstall icloud-mail@icloud-mail
 ```
 
 To run the connector as a remote server for claude.ai, see

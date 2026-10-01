@@ -44,6 +44,16 @@ export function createMcpServer(ctx: ConnectorContext, options: ToolOptions = {}
     },
     handler: (args: any) => Promise<any>
   ) => unknown;
+  // Strict-mode clients such as ChatGPT send null for every optional argument
+  // they leave unset; treat that as absent so defaults apply.
+  function nullAsAbsent(shape: z.ZodRawShape): z.ZodRawShape {
+    return Object.fromEntries(
+      Object.entries(shape).map(([key, schema]) => [
+        key,
+        schema.isOptional() ? z.preprocess((value) => value ?? undefined, schema) : schema,
+      ])
+    );
+  }
   function tool(
     name: string,
     description: string,
@@ -56,7 +66,7 @@ export function createMcpServer(ctx: ConnectorContext, options: ToolOptions = {}
       name,
       {
         description,
-        inputSchema,
+        inputSchema: nullAsAbsent(inputSchema),
         annotations: {
           readOnlyHint: readOnly,
           destructiveHint: false,
@@ -411,7 +421,10 @@ export function createMcpServer(ctx: ConnectorContext, options: ToolOptions = {}
       bcc: emails.optional(),
       subject: z.string().optional(),
       body: z.string().optional(),
-      htmlBody: z.string().nullable().optional(),
+      htmlBody: z
+        .string()
+        .optional()
+        .describe("Replacement HTML body. An empty string removes the HTML part."),
       attachmentsToAdd: attachments,
       attachmentNamesToRemove: z.array(z.string()).optional(),
       includeSignature,
@@ -422,7 +435,7 @@ export function createMcpServer(ctx: ConnectorContext, options: ToolOptions = {}
       if (
         !update.from &&
         update.includeSignature !== false &&
-        (update.body !== undefined || typeof update.htmlBody === "string")
+        (update.body !== undefined || update.htmlBody)
       ) {
         const current = await drafts.getDraft(draftId);
         if (!current.success || !current.draft) return current;
