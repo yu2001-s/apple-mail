@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.3.1 — 2026-10-02
 
+- Publish ID patterns ChatGPT's connector validator accepts: no escaped
+  punctuation (zod's `startsWith()` emitted `^imap\:`) and anchored to the
+  whole value (`^imap:[A-Za-z0-9_-]+$`), since it requires a full match.
+- Lower `read_message`'s minimum `maxBodyChars` to 100.
 - Accept `null` for optional tool arguments, as strict-mode clients such as
   ChatGPT send; `update_draft` now removes the HTML part only for an empty
   `htmlBody` string.

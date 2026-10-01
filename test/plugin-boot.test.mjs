@@ -110,6 +110,23 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
     });
     assert(!nulled.isError, JSON.stringify(nulled));
     assert.equal(JSON.parse(nulled.content[0].text).from, sender);
+    // ChatGPT requires full matches and rejects escaped punctuation such as `\:`.
+    const patterns = [];
+    const walk = (node) => {
+      if (!node || typeof node !== "object") return;
+      if (typeof node.pattern === "string") patterns.push(node.pattern);
+      for (const value of Object.values(node)) walk(value);
+    };
+    for (const tool of tools) walk(tool.inputSchema);
+    const samples = [
+      ["^[/].*$", "/tmp/attachment.pdf"],
+      ["^apple-draft:[A-Za-z0-9_-]+$", "apple-draft:ea1baad1-3355-4665-a658-73e2a389cc6d"],
+      ["^imap:[A-Za-z0-9_-]+$", "imap:eyJhIjoiaUNsb3VkIn0"],
+    ];
+    assert.deepEqual([...new Set(patterns)].sort(), samples.map(([pattern]) => pattern));
+    for (const [pattern, sample] of samples) {
+      assert.equal(new RegExp(pattern, "u").exec(sample)?.[0], sample);
+    }
     const read = tools.find((tool) => tool.name === "read_message").inputSchema;
     assert.deepEqual(read.required, ["id"]);
     assert.equal(read.properties.maxBodyChars.type, "integer");

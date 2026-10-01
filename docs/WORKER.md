@@ -59,6 +59,13 @@ that asks for the owner password.
   claude mcp add --transport http icloud-mail https://icloud-mail.<your-subdomain>.workers.dev/mcp
   ```
 
+After changing tool parameters, deploy the Worker, then open the existing
+iCloud Mail plugin in ChatGPT, choose **Manage**, and select **Refresh tools**.
+Start a new conversation if the host still has the old tool definitions.
+See [OpenAI's metadata refresh guide](https://developers.openai.com/plugins/deploy/connect-chatgpt#refresh-metadata).
+ID patterns must match the complete value: `^imap:[A-Za-z0-9_-]+$` works with
+the host's full-match validation, while a prefix-only `^imap:` does not.
+
 ## Security
 
 - `@cloudflare/workers-oauth-provider` implements OAuth 2.1: PKCE, single-use

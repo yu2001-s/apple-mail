@@ -188,6 +188,19 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
     assert.equal(listed.result.tools.length, 18);
+    // Validate like a host that requires the pattern to match the complete ID.
+    // A prefix-only pattern passes RegExp.test(), but fails this host check.
+    for (const [name, field, sample, invalid] of [
+      ["read_message", "id", "imap:eyJhIjoiaUNsb3VkIn0", "imap:"],
+      ["preview_reply", "originalMessageId", "imap:eyJhIjoiaUNsb3VkIn0", "imap:!"],
+      ["get_draft", "draftId", "apple-draft:ea1baad1-3355-4665-a658-73e2a389cc6d", "apple-draft:"],
+    ]) {
+      const schema = listed.result.tools.find((tool) => tool.name === name).inputSchema;
+      const pattern = new RegExp(schema.properties[field].pattern, "u");
+      assert.equal(pattern.exec(sample)?.[0], sample, `${name}: full ID must match`);
+      assert.equal(pattern.test(invalid), false, `${name}: invalid ID must be rejected`);
+      assert.equal(pattern.test(`other:${sample}`), false, `${name}: wrong prefix must be rejected`);
+    }
     const createDraft = listed.result.tools.find((tool) => tool.name === "create_draft");
     assert.equal(createDraft.inputSchema.properties.attachments.items.type, "object");
     const signature = await (
