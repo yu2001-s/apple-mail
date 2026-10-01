@@ -1,6 +1,6 @@
 {
   "name": "icloud-mail",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Direct iCloud IMAP/SMTP mail, threaded replies, reviewed drafts, and saved sender signatures.",
   "author": {
     "name": "Poieti"

@@ -71,10 +71,23 @@ export function createMcpServer(ctx: ConnectorContext, options: ToolOptions = {}
   // Strict-mode clients such as ChatGPT send null for every optional argument
   // they leave unset; treat that as absent so defaults apply.
   function nullAsAbsent(shape: z.ZodRawShape): z.ZodRawShape {
+    // Keep optional/default wrappers outside nullable so the exported JSON
+    // Schema accepts null too, without hiding defaults inside a union branch.
+    function allowNull(schema: z.ZodTypeAny): z.ZodTypeAny {
+      const nullable =
+        schema instanceof z.ZodOptional
+          ? allowNull(schema.unwrap()).optional()
+          : schema instanceof z.ZodDefault
+            ? allowNull(schema.removeDefault()).default(schema._def.defaultValue)
+            : schema.nullable();
+      return schema.description ? nullable.describe(schema.description) : nullable;
+    }
     return Object.fromEntries(
       Object.entries(shape).map(([key, schema]) => [
         key,
-        schema.isOptional() ? z.preprocess((value) => value ?? undefined, schema) : schema,
+        schema.isOptional()
+          ? z.preprocess((value) => value ?? undefined, allowNull(schema))
+          : schema,
       ])
     );
   }

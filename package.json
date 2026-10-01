@@ -1,6 +1,6 @@
 {
   "name": "icloud-mail-mcp",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "packageManager": "pnpm@11.9.0",
   "description": "Direct iCloud IMAP/SMTP MCP connector for Claude and Codex, local or remote, with threaded replies and saved signatures",
   "type": "module",

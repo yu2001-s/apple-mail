@@ -9,6 +9,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Dependency-free: this file runs against the bundle without node_modules.
+const branches = (schema) => (schema.anyOf ? schema.anyOf.flatMap(branches) : [schema]);
 const ownerPassword = "correct horse battery staple";
 const redirectUri = "https://claude.ai/api/mcp/auth_callback";
 
@@ -195,7 +197,13 @@ test("remote mode requires OAuth and serves the tools to an approved client", as
     assert.equal(listed.result.tools.length, 20);
     const createDraft = listed.result.tools.find((tool) => tool.name === "create_draft");
     // Remote callers cannot name files on the server.
-    assert.equal(createDraft.inputSchema.properties.attachments.items.type, "object");
+    const list = branches(createDraft.inputSchema.properties.attachments).find(
+      (schema) => schema.type === "array"
+    );
+    assert.deepEqual(
+      branches(list.items).map((schema) => schema.type),
+      ["object"]
+    );
 
     const refreshed = await (
       await token({ grant_type: "refresh_token", refresh_token: tokens.refresh_token })

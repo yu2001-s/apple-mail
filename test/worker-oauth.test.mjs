@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ownerPassword = "correct horse battery staple";
@@ -54,7 +55,16 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       "--show-interactive-dev-session=false",
       ...Object.entries(vars).flatMap(([key, value]) => ["--var", `${key}:${value}`]),
     ],
-    { cwd: root, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, CI: "1" } }
+    {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        CI: "1",
+        WRANGLER_LOG_PATH: join(state, "logs"),
+        WRANGLER_REGISTRY_PATH: join(state, "registry"),
+      },
+    }
   );
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk));
@@ -190,6 +200,22 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
     assert.equal(listed.result.tools.length, 20);
+    // A host must accept null before a tools/call can reach the Worker.
+    const schemas = new AjvJsonSchemaValidator();
+    for (const tool of listed.result.tools) {
+      for (const [field, schema] of Object.entries(tool.inputSchema.properties)) {
+        const required = tool.inputSchema.required?.includes(field) ?? false;
+        const result = schemas.getValidator(schema)(null);
+        assert.equal(result.valid, !required, `${tool.name}.${field}: null handling`);
+      }
+    }
+    for (const name of ["get_signature", "preview_reply", "set_signature"]) {
+      const validate = schemas.getValidator(
+        listed.result.tools.find((tool) => tool.name === name).inputSchema.properties.from
+      );
+      assert(validate("stranger@example.com").valid, `${name}: validate senders at runtime`);
+      assert(!validate("invalid").valid, `${name}: from must remain an email field`);
+    }
     // Validate like a host that requires the pattern to match the complete ID.
     // A prefix-only pattern passes RegExp.test(), but fails this host check.
     for (const [name, field, sample, invalid] of [
@@ -208,7 +234,11 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       );
     }
     const createDraft = listed.result.tools.find((tool) => tool.name === "create_draft");
-    assert.equal(createDraft.inputSchema.properties.attachments.items.type, "object");
+    const validateAttachments = schemas.getValidator(
+      createDraft.inputSchema.properties.attachments
+    );
+    assert(validateAttachments([{ filename: "test.txt", contentBase64: "dGVzdA==" }]).valid);
+    assert(!validateAttachments(["/tmp/test.txt"]).valid);
     const signature = await (
       await rpc(tokens.access_token, {
         jsonrpc: "2.0",
@@ -227,6 +257,7 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       })
     ).json();
     assert.ok(!nulled.result.isError, JSON.stringify(nulled));
+    assert.equal(JSON.parse(nulled.result.content[0].text).from, sender);
     // Each request builds a fresh context, so this proves settings persist in KV.
     const tool = async (id, name, args) =>
       (
@@ -239,11 +270,27 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
           })
         ).json()
       ).result;
-    const updated = await tool(5, "update_settings", { primaryAddress: "alias@example.com" });
+    const updated = await tool(5, "update_settings", {
+      primaryAddress: "alias@example.com",
+      addAddresses: null,
+      removeAddresses: null,
+    });
     assert.ok(!updated.isError, JSON.stringify(updated));
-    await tool(6, "set_signature", { signature: "Alias" });
+    const signed = await tool(6, "set_signature", { from: null, signature: "Alias" });
+    assert.ok(!signed.isError, JSON.stringify(signed));
     const reread = JSON.parse((await tool(7, "get_signature", {})).content[0].text);
     assert.deepEqual(reread, { success: true, from: "alias@example.com", signature: "Alias" });
+    for (const [name, args] of [
+      ["get_signature", { from: "stranger@example.com" }],
+      ["get_signature", { from: "invalid" }],
+      ["set_signature", { from: null, signature: null }],
+      ["update_settings", { removeAddresses: ["alias@example.com"] }],
+    ]) {
+      const rejected = await tool(8, name, args);
+      assert.ok(rejected.isError, `${name}: invalid arguments must be rejected`);
+    }
+    const unchanged = JSON.parse((await tool(9, "get_signature", { from: null })).content[0].text);
+    assert.deepEqual(unchanged, reread, "rejected calls must not change settings");
   } finally {
     child.kill();
     await new Promise((resolve) => {

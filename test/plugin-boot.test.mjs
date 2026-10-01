@@ -9,6 +9,13 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Dependency-free JSON Schema checks: this file runs against the committed
+// bundle without node_modules installed.
+const branches = (schema) => (schema.anyOf ? schema.anyOf.flatMap(branches) : [schema]);
+const acceptsNull = (schema) =>
+  branches(schema).some((s) => s.type === "null" || [].concat(s.type ?? []).includes("null"));
+const valueBranch = (schema) => branches(schema).find((s) => s.type !== "null");
 test("installed bundle boots without node_modules and exposes the direct iCloud tools", async () => {
   const temp = mkdtempSync(join(tmpdir(), "icloud-standalone-"));
   const plugin = join(temp, "plugin");
@@ -97,6 +104,20 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
     assert.equal(tools.length, 20);
     // Strict host validators may not resolve $ref; every field is inlined.
     assert(!JSON.stringify(tools).includes('"$ref"'), "tool schemas must not contain $ref");
+    // Hosts validate JSON Schema before the server can normalize null to absent.
+    for (const tool of tools) {
+      for (const [field, schema] of Object.entries(tool.inputSchema.properties)) {
+        const required = tool.inputSchema.required?.includes(field);
+        assert.equal(acceptsNull(schema), !required, `${tool.name}.${field} null handling`);
+      }
+    }
+    for (const name of ["get_signature", "preview_reply", "set_signature"]) {
+      const from = valueBranch(
+        tools.find((tool) => tool.name === name).inputSchema.properties.from
+      );
+      // Senders are checked at run time; an enum would go stale in host caches.
+      assert.deepEqual([from.type, from.format, from.enum], ["string", "email", undefined], name);
+    }
     assert(tools.some((tool) => tool.name === "preview_reply" && tool.annotations.readOnlyHint));
     assert(
       tools
@@ -161,7 +182,7 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
     assert.equal(stored.primaryAddress, "alias@example.com");
     const read = tools.find((tool) => tool.name === "read_message").inputSchema;
     assert.deepEqual(read.required, ["id"]);
-    assert.equal(read.properties.maxBodyChars.type, "integer");
+    assert.equal(valueBranch(read.properties.maxBodyChars).type, "integer");
     assert.equal(read.properties.maxBodyChars.default, 30000);
   } finally {
     lines.close();

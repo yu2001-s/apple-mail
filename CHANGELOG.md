@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.1 — 2026-10-02
+
+- Publish optional tool arguments as nullable in JSON Schema. ChatGPT
+  validates arguments against the schema itself and rejected the `null` it
+  sends for unset fields before the request reached the server.
+
 ## 1.4.0 — 2026-10-02
 
 - Settings editable from chat: `update_settings` changes the primary (default)
