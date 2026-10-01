@@ -220,14 +220,14 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
 <style>body{font:16px system-ui,sans-serif;max-width:28rem;margin:4rem auto;padding:0 1rem;color:#1d1d1f;background:#fff}
 @media (prefers-color-scheme:dark){body{color:#f5f5f7;background:#1d1d1f}}
 input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin-top:.5rem}
-.row{display:flex;gap:.5rem}code{word-break:break-all}</style></head>
+.row{display:flex;flex-direction:row-reverse;gap:.5rem}code{word-break:break-all}</style></head>
 <body><h1>Authorize iCloud Mail</h1>
 <p><strong>${name}</strong> is requesting access to read, draft and send mail from this account.</p>
 <p>After approval you will return to <code>${destination}</code>.</p>
 <form method="post" action="/oauth/approve">
 <input type="hidden" name="request_id" value="${requestId}">
 <label>Owner password<input type="password" name="password" autocomplete="current-password" autofocus></label>
-<div class="row"><button name="decision" value="deny">Deny</button><button name="decision" value="approve">Approve</button></div>
+<div class="row"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></div>
 </form></body></html>`);
   }
 

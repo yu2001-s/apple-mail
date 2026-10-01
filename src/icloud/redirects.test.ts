@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedRedirect, parseRedirectList } from "@/icloud/redirects.js";
+import { formActionSources, isAllowedRedirect, parseRedirectList } from "@/icloud/redirects.js";
 
 describe("OAuth redirect allowlist", () => {
   it.each([
@@ -29,5 +29,18 @@ describe("OAuth redirect allowlist", () => {
     expect(extra).toEqual(["https://app.example/cb", "https://other.example/cb"]);
     expect(isAllowedRedirect("https://app.example/cb", extra)).toBe(true);
     expect(isAllowedRedirect("https://app.example/cb2", extra)).toBe(false);
+  });
+
+  it("lists every callback origin as a form-action source", () => {
+    const sources = formActionSources(["https://app.example/cb", "bad"]).split(" ");
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        "'self'",
+        "https://claude.ai",
+        "https://chatgpt.com",
+        "https://app.example",
+      ])
+    );
+    expect(sources).not.toContain("bad");
   });
 });

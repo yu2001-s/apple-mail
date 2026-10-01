@@ -7,7 +7,7 @@ export function escapeHtml(value: string): string {
 const STYLE = `body{font:16px system-ui,sans-serif;max-width:28rem;margin:4rem auto;padding:0 1rem;color:#1d1d1f;background:#fff}
 @media (prefers-color-scheme:dark){body{color:#f5f5f7;background:#1d1d1f}}
 input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin-top:.5rem}
-.row{display:flex;gap:.5rem}.error{color:#d70015}`;
+.row{display:flex;flex-direction:row-reverse;gap:.5rem}.error{color:#d70015}`;
 
 function page(title: string, body: string): string {
   return `<!doctype html>
@@ -35,7 +35,7 @@ ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
 <form method="post">
 <input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <label>Owner password<input type="password" name="password" autocomplete="current-password" autofocus></label>
-<div class="row"><button name="decision" value="deny">Deny</button><button name="decision" value="approve">Approve</button></div>
+<div class="row"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></div>
 </form>`
   );
 }
@@ -49,7 +49,7 @@ export function retryPage(handle: string, error: string): string {
 <form method="post">
 <input type="hidden" name="handle" value="${escapeHtml(handle)}">
 <label>Owner password<input type="password" name="password" autocomplete="current-password" autofocus></label>
-<div class="row"><button name="decision" value="deny">Deny</button><button name="decision" value="approve">Approve</button></div>
+<div class="row"><button name="decision" value="approve">Approve</button><button name="decision" value="deny">Deny</button></div>
 </form>`
   );
 }

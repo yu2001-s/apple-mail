@@ -134,7 +134,12 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     const page = await fetch(authorizeUrl, { redirect: "manual" });
     const html = await page.text();
     assert.equal(page.status, 200, html);
-    assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+    const csp = page.headers.get("content-security-policy");
+    assert.match(csp, /frame-ancestors 'none'/);
+    // Browsers apply form-action to the post-submit redirect back to the client.
+    assert.match(csp, /form-action [^;]*https:\/\/claude\.ai/);
+    // Enter in the password field submits the first button, which must approve.
+    assert.ok(html.indexOf('value="approve"') < html.indexOf('value="deny"'));
     assert.match(html, /Test &#60;client&#62;/);
     const handle = html.match(/name="handle" value="([^"]+)"/)[1];
     const cookie = page.headers

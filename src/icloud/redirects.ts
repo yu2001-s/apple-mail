@@ -34,6 +34,31 @@ export function isAllowedRedirect(uri: string, extra: Iterable<string> = []): bo
   );
 }
 
+/**
+ * CSP form-action sources for the approval form. Browsers apply form-action
+ * to the redirect that follows the submission, so every callback origin the
+ * code may be sent to must be listed, not just this server.
+ */
+export function formActionSources(extra: Iterable<string> = []): string {
+  const sources = new Set([
+    "'self'",
+    "https://claude.ai",
+    "https://claude.com",
+    "https://chatgpt.com",
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    "http://[::1]:*",
+  ]);
+  for (const uri of extra) {
+    try {
+      sources.add(new URL(uri).origin);
+    } catch {
+      // Ignore malformed settings; they are never allowed as redirects either.
+    }
+  }
+  return [...sources].join(" ");
+}
+
 /** Extra exact callbacks from a comma-separated setting. */
 export function parseRedirectList(value: string | undefined): string[] {
   return (value || "")

@@ -16,7 +16,7 @@ import {
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { connectImap, type ImapClientLike, type ImapConnect } from "../services/imapClient.js";
 import { loadContext, type Preferences } from "../icloud/context.js";
-import { isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
+import { formActionSources, isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
 import { createMcpServer } from "../icloud/tools.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
 
@@ -145,13 +145,13 @@ async function passwordMatches(supplied: string, expected: string): Promise<bool
   return diff === 0;
 }
 
-function withPageHeaders(headers: Headers): Headers {
+function withPageHeaders(headers: Headers, extra: string[]): Headers {
   headers.set("Content-Type", "text/html; charset=utf-8");
   headers.set("Cache-Control", "no-store");
   headers.set("Referrer-Policy", "no-referrer");
   headers.set(
     "Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
+    `default-src 'none'; style-src 'unsafe-inline'; form-action ${formActionSources(extra)}; frame-ancestors 'none'`
   );
   return headers;
 }
@@ -172,7 +172,7 @@ async function authorize(request: Request, env: Env): Promise<Response> {
       const details = await oauth.describeConsent(authRequest);
       const consent = await oauth.beginConsent(authRequest);
       return new Response(consentPage(details, consent.handle), {
-        headers: withPageHeaders(consent.headers),
+        headers: withPageHeaders(consent.headers, extra),
       });
     }
     if (request.method !== "POST") return messagePage("Method not allowed.", 405);
@@ -189,7 +189,7 @@ async function authorize(request: Request, env: Env): Promise<Response> {
       await recordFailure(env);
       return new Response(retryPage(handle, "Incorrect owner password."), {
         status: 401,
-        headers: withPageHeaders(new Headers()),
+        headers: withPageHeaders(new Headers(), extra),
       });
     }
     const approved = await oauth.approveConsent(request, handle, { scope: [MAIL_SCOPE] });
@@ -209,7 +209,11 @@ async function authorize(request: Request, env: Env): Promise<Response> {
     if (error instanceof AuthorizationError && error.redirectTo) {
       return Response.redirect(error.redirectTo, 302);
     }
-    if (error instanceof AuthorizationError) return messagePage(error.description);
+    if (error instanceof AuthorizationError) {
+      return messagePage(
+        `${error.description}. Return to Claude or ChatGPT and connect again; an approval page is valid for 10 minutes.`
+      );
+    }
     if (error instanceof CimdFetchError) return messagePage("This app could not be verified.");
     throw error;
   }
