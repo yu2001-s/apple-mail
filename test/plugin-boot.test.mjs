@@ -44,6 +44,7 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
       ...process.env,
       ICLOUD_MAIL_NODE: process.execPath,
       ICLOUD_MAIL_DATA_DIR: temp,
+      ICLOUD_MAIL_ADDRESS_DISCOVERY: "off",
       APPLE_MAIL_MCP_CONFIG_FILE: join(temp, "config.json"),
       APPLE_MAIL_MCP_IMAP_HOST: "imap.mail.me.com",
       APPLE_MAIL_MCP_IMAP_ACCOUNT: sender,
@@ -51,7 +52,7 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
       APPLE_MAIL_MCP_SMTP_HOST: "smtp.mail.me.com",
       APPLE_MAIL_MCP_SMTP_USER: sender,
       APPLE_MAIL_MCP_SMTP_FROM: sender,
-      APPLE_MAIL_MCP_SMTP_ALLOWED_FROM: sender,
+      APPLE_MAIL_MCP_SMTP_ALLOWED_FROM: `${sender},alias@example.com`,
     },
   });
   const pending = new Map();
@@ -93,7 +94,9 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n"
     );
     const { tools } = await request(2, "tools/list");
-    assert.equal(tools.length, 18);
+    assert.equal(tools.length, 20);
+    // Strict host validators may not resolve $ref; every field is inlined.
+    assert(!JSON.stringify(tools).includes('"$ref"'), "tool schemas must not contain $ref");
     assert(tools.some((tool) => tool.name === "preview_reply" && tool.annotations.readOnlyHint));
     assert(
       tools
@@ -123,10 +126,39 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
       ["^apple-draft:[A-Za-z0-9_-]+$", "apple-draft:ea1baad1-3355-4665-a658-73e2a389cc6d"],
       ["^imap:[A-Za-z0-9_-]+$", "imap:eyJhIjoiaUNsb3VkIn0"],
     ];
-    assert.deepEqual([...new Set(patterns)].sort(), samples.map(([pattern]) => pattern));
+    assert.deepEqual(
+      [...new Set(patterns)].sort(),
+      samples.map(([pattern]) => pattern)
+    );
     for (const [pattern, sample] of samples) {
       assert.equal(new RegExp(pattern, "u").exec(sample)?.[0], sample);
     }
+    // Settings edited from chat persist and take effect without a restart.
+    const call = async (id, name, args) => {
+      const out = await request(id, "tools/call", { name, arguments: args });
+      const text = out.content[0].text;
+      return { isError: out.isError, data: out.isError ? text : JSON.parse(text) };
+    };
+    assert.equal(
+      (await call(5, "update_settings", { primaryAddress: "alias@example.com" })).data
+        .primaryAddress,
+      "alias@example.com"
+    );
+    const signed = await call(6, "set_signature", { signature: "Alias\nExample" });
+    assert.deepEqual(signed.data, {
+      success: true,
+      from: "alias@example.com",
+      signature: "Alias\nExample",
+    });
+    const listed = await call(7, "list_sending_addresses", {});
+    assert.equal(listed.data.primaryAddress, "alias@example.com");
+    assert.deepEqual(listed.data.withSignature, [sender, "alias@example.com"]);
+    const rejected = await call(8, "get_signature", { from: "stranger@example.com" });
+    assert(rejected.isError);
+    const removed = await call(9, "update_settings", { removeAddresses: ["alias@example.com"] });
+    assert(removed.isError, "the primary address cannot be removed");
+    const stored = JSON.parse(readFileSync(join(temp, "settings.json"), "utf8"));
+    assert.equal(stored.primaryAddress, "alias@example.com");
     const read = tools.find((tool) => tool.name === "read_message").inputSchema;
     assert.deepEqual(read.required, ["id"]);
     assert.equal(read.properties.maxBodyChars.type, "integer");

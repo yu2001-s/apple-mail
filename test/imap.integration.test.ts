@@ -35,6 +35,7 @@ import {
   imapBatchMarkRead,
   imapBatchMove,
   imapThread,
+  imapScanHeaders,
   encodeImapId,
   decodeImapId,
 } from "@/services/imapClient.js";
@@ -275,5 +276,23 @@ run("IMAP drafts shared across devices (GreenMail)", () => {
     });
     expect((await laptop.getDraft(draftId)).draft?.deliveryState).toBe("draft");
     expect((await laptop.deleteDraft(draftId)).success).toBe(true);
+  });
+});
+
+run("address discovery headers (GreenMail)", () => {
+  it("reads From in Sent and recipients in INBOX without bodies", async () => {
+    await imapCreateMailbox("Sent", deps).catch(() => undefined);
+    const c = raw();
+    await c.connect();
+    const msg = (from: string, to: string) =>
+      Buffer.from(`From: ${from}\r\nTo: ${to}\r\nSubject: scan\r\n\r\nbody\r\n`);
+    await c.append("Sent", msg('"Alias" <alias@example.org>', "x@example.com"), ["\\Seen"]);
+    await c.append("INBOX", msg("x@example.com", "Team <team@example.org>, me@example.org"), []);
+    await c.logout();
+
+    const sent = await imapScanHeaders("sent", ["From"], deps);
+    expect(sent.some((row) => row.From?.includes("alias@example.org"))).toBe(true);
+    const inbox = await imapScanHeaders("inbox", ["To", "Cc"], deps);
+    expect(inbox.some((row) => row.To?.includes("team@example.org"))).toBe(true);
   });
 });

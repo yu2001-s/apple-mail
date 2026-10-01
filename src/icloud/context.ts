@@ -1,13 +1,20 @@
 import nodemailer from "nodemailer";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { loadFileConfig } from "../services/fileConfig.js";
 import { ImapFlow } from "../services/imapFlow.js";
 import { resolveImapConfig, decodeImapId, type ImapDeps } from "../services/imapClient.js";
 import { resolveSmtpConfig, sendRawViaSmtp } from "../services/smtpMailer.js";
 import { ImapDraftManager } from "../services/imapDraftManager.js";
 import type { SendingIdentity } from "../types.js";
+import {
+  FileSettingsStore,
+  sameAddress,
+  seedSettings,
+  type Settings,
+  type SettingsStore,
+} from "./settings.js";
 
 export type Preferences = {
   primaryAddress?: string;
@@ -18,9 +25,12 @@ export type Preferences = {
 export interface ConnectorContext {
   dataDirectory: string;
   account: string;
-  addresses: string[];
-  defaultFrom: string;
-  preferences: Preferences;
+  /** The current settings; reload with refresh() before relying on them. */
+  settings: Settings;
+  /** Reload settings from the store, seeding it on first use. */
+  refresh(): Promise<Settings>;
+  /** Persist new settings and use them for the rest of this context. */
+  saveSettings(next: Settings): Promise<void>;
   drafts: ImapDraftManager;
   /** Passed to every pooled IMAP operation. */
   imapDeps: ImapDeps;
@@ -32,8 +42,10 @@ export interface ConnectorContext {
 }
 
 export interface ContextOptions {
-  /** Preferences supplied directly instead of read from the data directory. */
+  /** Seed preferences supplied directly instead of read from the data directory. */
   preferences?: Preferences;
+  /** Where settings live. Defaults to settings.json in the data directory. */
+  settingsStore?: SettingsStore;
   /** Draft cache file; `null` keeps it in memory. Defaults to the data directory. */
   registryPath?: string | null;
   /** Supplies IMAP connections, e.g. one reused for a whole request. */
@@ -58,32 +70,19 @@ export function loadContext(
   ) {
     throw new Error("Expected the existing iCloud IMAP/SMTP configuration.");
   }
-  const addresses = [
-    ...new Set(
-      [
-        env.APPLE_MAIL_MCP_SMTP_USER,
-        env.APPLE_MAIL_MCP_SMTP_FROM,
-        ...(env.APPLE_MAIL_MCP_SMTP_ALLOWED_FROM || "").split(","),
-      ]
-        .filter(Boolean)
-        .map((x) => x!.trim())
-        .filter(Boolean)
-    ),
-  ];
+  const preferencesPath = join(dataDirectory, "preferences.json");
   const preferences: Preferences =
     options.preferences ??
-    JSON.parse(readFileSync(join(dataDirectory, "preferences.json"), "utf8"));
-  const preferredAddress = addresses.find(
-    (address) => address.toLowerCase() === preferences.primaryAddress?.toLowerCase()
-  );
-  if (!preferredAddress) {
-    throw new Error("The primary address must be a configured sending address.");
+    (existsSync(preferencesPath) ? JSON.parse(readFileSync(preferencesPath, "utf8")) : {});
+  const seed = seedSettings(env, preferences);
+  const store =
+    options.settingsStore ?? new FileSettingsStore(join(dataDirectory, "settings.json"));
+  let settings = seed;
+  function senderFor(selector?: string): string | undefined {
+    return settings.addresses.find((x) => sameAddress(x, selector ?? settings.primaryAddress));
   }
-  const defaultFrom: string = preferredAddress;
   function identity(selector?: string): SendingIdentity | null {
-    const email = addresses.find(
-      (x) => x.toLowerCase() === (selector ?? defaultFrom).toLowerCase()
-    );
+    const email = senderFor(selector);
     return email
       ? {
           identityId: email,
@@ -93,7 +92,7 @@ export function loadContext(
           accountId: account!,
           accountName: account!,
           enabled: true,
-          isDefault: email === defaultFrom,
+          isDefault: sameAddress(email, settings.primaryAddress),
         }
       : null;
   }
@@ -116,8 +115,13 @@ export function loadContext(
     imapDeps: () => imapDeps,
     resolveIdentity: identity,
     imapAccount: () => account,
-    selfAddresses: addresses,
-    smtpConfig: (id) => ({ ...resolveSmtpConfig(env), from: id.email }),
+    selfAddresses: () => settings.addresses,
+    smtpConfig: (id) => {
+      // Re-checked at send time: a draft may predate the sender's removal.
+      const from = senderFor(id.email);
+      if (!from) throw new Error(`"${id.email}" is no longer a sending address.`);
+      return { ...resolveSmtpConfig(env), from, allowedFrom: [...settings.addresses] };
+    },
     smtpSend: (raw, envelope, config) => sendRawViaSmtp(raw, envelope, config, tlsTransport),
   });
   async function withImap<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
@@ -164,12 +168,22 @@ export function loadContext(
     );
     return result;
   }
-  return {
+  const ctx: ConnectorContext = {
     dataDirectory,
     account,
-    addresses,
-    defaultFrom,
-    preferences,
+    get settings() {
+      return settings;
+    },
+    async refresh() {
+      const stored = await store.load();
+      if (stored) settings = stored;
+      else await store.save((settings = seed));
+      return settings;
+    },
+    async saveSettings(next) {
+      await store.save(next);
+      settings = next;
+    },
     drafts,
     imapDeps,
     tlsTransport,
@@ -177,4 +191,5 @@ export function loadContext(
     checkId,
     serialize,
   };
+  return ctx;
 }

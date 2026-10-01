@@ -139,8 +139,8 @@ export interface ImapDraftManagerOptions {
   smtpConfig?: (identity: SendingIdentity) => SmtpConfig;
   smtpSend?: typeof sendRawViaSmtp;
   sleep?: (ms: number) => Promise<void>;
-  /** Configured aliases excluded from reply recipients. */
-  selfAddresses?: string[];
+  /** Configured aliases excluded from reply recipients, or a getter for the current ones. */
+  selfAddresses?: string[] | (() => string[]);
 }
 
 function defaultRegistryPath(): string {
@@ -174,7 +174,7 @@ export class ImapDraftManager {
   private readonly smtpConfigResolver: (identity: SendingIdentity) => SmtpConfig;
   private readonly smtpSend: typeof sendRawViaSmtp;
   private readonly sleep: (ms: number) => Promise<void>;
-  private readonly selfAddresses: string[];
+  private readonly selfAddressList: () => string[];
 
   constructor(options: ImapDraftManagerOptions) {
     this.registryPath =
@@ -191,7 +191,8 @@ export class ImapDraftManager {
         }));
     this.smtpSend = options.smtpSend ?? sendRawViaSmtp;
     this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-    this.selfAddresses = options.selfAddresses ?? [];
+    const self = options.selfAddresses ?? [];
+    this.selfAddressList = typeof self === "function" ? self : () => self;
   }
 
   private load(): ImapDraftRegistry {
@@ -560,7 +561,7 @@ export class ImapDraftManager {
       }
       const decoded = parseDraftMime(source.raw);
       original.subject = decoded.subject;
-      const self = [...this.selfAddresses, identity.email];
+      const self = [...this.selfAddressList(), identity.email];
       const selfSet = new Set(self.map((address) => address.toLowerCase()));
       const sentBySelf =
         original.from.length > 0 &&

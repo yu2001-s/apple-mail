@@ -27,7 +27,10 @@ passwords read from Keychain, your preferences and signatures, and a new
 owner password, which it prints once. Save that password; it approves every
 connection. Nothing personal is committed to `wrangler.jsonc`.
 
-To change secrets later, for example after editing a signature:
+Settings are edited from chat afterwards, for example "make hello@example.com
+my default sender" or "change my signature for me@example.com". They are
+stored in the Worker's KV; the `ICLOUD_MAIL_PREFERENCES` secret only seeds
+them on first use. To update account secrets such as an app password:
 
 ```sh
 node scripts/setup-worker.mjs --secrets

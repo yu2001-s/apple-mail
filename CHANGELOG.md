@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0 — 2026-10-02
+
+- Settings editable from chat: `update_settings` changes the primary (default)
+  sender and the sending addresses, `set_signature` sets or clears a
+  sender's signature. Settings live in `settings.json` locally and in KV on
+  the Worker, seeded from the existing configuration on first use.
+- Discover sending addresses: `list_sending_addresses` adds addresses used in
+  Sent (rescanned daily, or with `refresh`) and suggests custom-domain
+  recipients from the inbox. Addresses the user removed are never re-added.
+- Tool schemas and descriptions no longer embed addresses, so settings
+  changes need no tool refresh in ChatGPT; sender addresses are checked at
+  run time, including at send time for existing drafts.
+- Inline every schema field instead of emitting `$ref`.
+
 ## 1.3.1 — 2026-10-02
 
 - Publish ID patterns ChatGPT's connector validator accepts: no escaped

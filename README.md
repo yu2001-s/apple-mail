@@ -51,8 +51,12 @@ read-only verification. Start a new chat after installing or updating.
 
 Account configuration remains in
 `~/Library/Application Support/apple-mail-mcp/config.json`, with passwords in
-macOS Keychain. Primary address and signatures remain in
-`~/.codex/integrations/icloud-mail/preferences.json`. These are user data,
+macOS Keychain. The primary address, sending addresses and signatures live in
+`~/.codex/integrations/icloud-mail/settings.json` (KV on the Worker), seeded
+from `preferences.json` and the account configuration on first use and edited
+from chat with `update_settings` and `set_signature`. iCloud has no API for
+its alias settings, so `list_sending_addresses` adds addresses found in Sent
+and suggests custom-domain recipients from the inbox. These are user data,
 separate from the plugin package. Keep them across upgrades.
 
 Drafts live on iCloud: each managed draft carries its ID in a header, so every

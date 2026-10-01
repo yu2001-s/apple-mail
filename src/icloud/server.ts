@@ -7,28 +7,22 @@ import { httpOptionsFromEnv, startHttpServer } from "./http.js";
 
 const ctx = loadContext();
 const remote = process.argv.includes("--http") || process.env.ICLOUD_MAIL_TRANSPORT === "http";
+let close: () => Promise<void> = async () => undefined;
 
-let close: () => Promise<void>;
-if (remote) {
-  const http = startHttpServer(ctx, httpOptionsFromEnv(ctx));
-  http.catch((error) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
-  });
-  close = async () => {
-    const server = await http;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-  };
-} else {
-  const server = createMcpServer(ctx);
-  close = () => server.close();
-  process.stdin.on("end", () => {
-    void stop();
-  });
-  server.connect(new StdioServerTransport()).catch((error) => {
-    console.error(error.message);
-    process.exitCode = 1;
-  });
+async function main() {
+  // Seed settings.json from the account configuration on first run.
+  await ctx.refresh();
+  if (remote) {
+    const server = await startHttpServer(ctx, httpOptionsFromEnv(ctx));
+    close = () => new Promise<void>((resolve) => server.close(() => resolve()));
+  } else {
+    const server = createMcpServer(ctx);
+    close = () => server.close();
+    process.stdin.on("end", () => {
+      void stop();
+    });
+    await server.connect(new StdioServerTransport());
+  }
 }
 
 async function stop() {
@@ -39,3 +33,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
     void stop().finally(() => process.exit(0));
   });
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exit(1);
+});

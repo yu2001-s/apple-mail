@@ -38,6 +38,8 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     APPLE_MAIL_MCP_SMTP_USER: sender,
     APPLE_MAIL_MCP_SMTP_PASSWORD: "unused",
     APPLE_MAIL_MCP_SMTP_FROM: sender,
+    APPLE_MAIL_MCP_SMTP_ALLOWED_FROM: "alias@example.com",
+    ICLOUD_MAIL_ADDRESS_DISCOVERY: "off",
   };
   const child = spawn(
     join(root, "node_modules/.bin/wrangler"),
@@ -187,7 +189,7 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     const listed = await (
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
-    assert.equal(listed.result.tools.length, 18);
+    assert.equal(listed.result.tools.length, 20);
     // Validate like a host that requires the pattern to match the complete ID.
     // A prefix-only pattern passes RegExp.test(), but fails this host check.
     for (const [name, field, sample, invalid] of [
@@ -199,7 +201,11 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       const pattern = new RegExp(schema.properties[field].pattern, "u");
       assert.equal(pattern.exec(sample)?.[0], sample, `${name}: full ID must match`);
       assert.equal(pattern.test(invalid), false, `${name}: invalid ID must be rejected`);
-      assert.equal(pattern.test(`other:${sample}`), false, `${name}: wrong prefix must be rejected`);
+      assert.equal(
+        pattern.test(`other:${sample}`),
+        false,
+        `${name}: wrong prefix must be rejected`
+      );
     }
     const createDraft = listed.result.tools.find((tool) => tool.name === "create_draft");
     assert.equal(createDraft.inputSchema.properties.attachments.items.type, "object");
@@ -221,6 +227,23 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       })
     ).json();
     assert.ok(!nulled.result.isError, JSON.stringify(nulled));
+    // Each request builds a fresh context, so this proves settings persist in KV.
+    const tool = async (id, name, args) =>
+      (
+        await (
+          await rpc(tokens.access_token, {
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name, arguments: args },
+          })
+        ).json()
+      ).result;
+    const updated = await tool(5, "update_settings", { primaryAddress: "alias@example.com" });
+    assert.ok(!updated.isError, JSON.stringify(updated));
+    await tool(6, "set_signature", { signature: "Alias" });
+    const reread = JSON.parse((await tool(7, "get_signature", {})).content[0].text);
+    assert.deepEqual(reread, { success: true, from: "alias@example.com", signature: "Alias" });
   } finally {
     child.kill();
     await new Promise((resolve) => {

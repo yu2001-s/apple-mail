@@ -16,6 +16,7 @@ import {
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { connectImap, type ImapClientLike, type ImapConnect } from "../services/imapClient.js";
 import { loadContext, type Preferences } from "../icloud/context.js";
+import { kvSettingsStore } from "../icloud/settings.js";
 import { formActionSources, isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
 import { createMcpServer } from "../icloud/tools.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
@@ -101,11 +102,14 @@ const mcpHandler = {
     }
     const imap = requestImap();
     const context = loadContext(syncProcessEnv(env), {
+      // Seeds the KV settings on first use; afterwards settings are edited from chat.
       preferences: JSON.parse(env.ICLOUD_MAIL_PREFERENCES) as Preferences,
+      settingsStore: kvSettingsStore(env.OAUTH_KV),
       registryPath: null,
       connect: imap.connect,
       fileConfig: false,
     });
+    await context.refresh();
     const server = createMcpServer(context, { remote: true });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

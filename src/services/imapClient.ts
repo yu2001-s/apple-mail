@@ -1370,6 +1370,36 @@ function flagOp(id: string, flag: string, add: boolean, deps: ImapDeps): Promise
   });
 }
 
+/** Header values of the newest messages in a mailbox, without their bodies. */
+export async function imapScanHeaders(
+  target: ImapSpecialMailbox | "inbox",
+  names: string[],
+  deps: ImapDeps = {},
+  scanLimit = 300
+): Promise<Array<Record<string, string>>> {
+  return withClient(deps, async (client) => {
+    const path = target === "inbox" ? "INBOX" : await resolveSpecialMailboxPath(client, target);
+    const lock = await client.getMailboxLock(path);
+    try {
+      const found = await client.search({ all: true }, { uid: true });
+      const uids = (Array.isArray(found) ? found : []).slice(-scanLimit);
+      const rows: Array<Record<string, string>> = [];
+      if (!uids.length) return rows;
+      for await (const message of client.fetch(uids.join(","), { headers: names }, { uid: true })) {
+        const row: Record<string, string> = {};
+        for (const name of names) {
+          const value = headerValue(message.headers, name);
+          if (value) row[name] = value;
+        }
+        rows.push(row);
+      }
+      return rows;
+    } finally {
+      lock.release();
+    }
+  });
+}
+
 /** Add or remove one IMAP keyword (for example a connector state marker). */
 export const imapSetKeyword = (
   id: string,
