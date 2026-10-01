@@ -67,6 +67,11 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Worker OAuth flow in local workerd
+        run: pnpm run test:worker
+        env:
+          WRANGLER_SEND_METRICS: "false"
+
       - name: Verify committed plugin bundle matches source
         run: git diff --exit-code -- plugins/icloud-mail/server plugins/icloud-mail/LICENSE
 
@@ -79,7 +84,7 @@ jobs:
         with:
           node-version: "20"
       - name: Boot the committed bundle without installed dependencies
-        run: node --test test/plugin-boot.test.mjs
+        run: node --test test/plugin-boot.test.mjs test/http-oauth.test.mjs
 
   # IMAP backend integration tests run against a real IMAP server (GreenMail).
   # The direct IMAP transport runs on Linux with GreenMail as a service container.

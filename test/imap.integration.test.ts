@@ -9,7 +9,12 @@
  *   RUN_IMAP_IT=1 pnpm test:imap
  */
 import { describe, it, expect, beforeAll } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ImapFlow } from "imapflow";
+import { ImapDraftManager, type ImapDraftManagerOptions } from "@/services/imapDraftManager.js";
+import type { SendingIdentity } from "@/types.js";
 import {
   type ImapConfig,
   imapListMessages,
@@ -211,5 +216,64 @@ run("IMAP 2.1 optimizations (GreenMail) integration", () => {
     const t = await imapThread(encodeImapId("greenmail", "INBOX", replyUid), deps, 50);
     expect(t).not.toBeNull();
     expect(t?.count).toBeGreaterThanOrEqual(2);
+  });
+});
+
+run("IMAP drafts shared across devices (GreenMail)", () => {
+  // Two managers with separate local registries model two devices.
+  async function devices(smtpSend: ImapDraftManagerOptions["smtpSend"]) {
+    for (const box of ["Drafts", "Sent"]) await imapCreateMailbox(box, deps).catch(() => undefined);
+    const sender: SendingIdentity = {
+      identityId: cfg.user,
+      accountId: "greenmail",
+      accountName: "greenmail",
+      email: "tester@example.com",
+      fullName: "",
+      sender: "tester@example.com",
+      enabled: true,
+      isDefault: true,
+    };
+    const device = () =>
+      new ImapDraftManager({
+        registryPath: join(mkdtempSync(join(tmpdir(), "imap-it-device-")), "drafts.json"),
+        resolveIdentity: (selector) =>
+          !selector || selector === sender.email || selector === sender.identityId ? sender : null,
+        imapAccount: () => "greenmail",
+        imapDeps: () => deps,
+        smtpConfig: () => ({
+          host: "smtp.example.com",
+          port: 587,
+          secure: false,
+          user: sender.email,
+          pass: "unused",
+          from: sender.email,
+        }),
+        smtpSend,
+        sleep: async () => undefined,
+      });
+    return { laptop: device(), desktop: device() };
+  }
+
+  it("finds another device's draft by header and honors its send marker", async () => {
+    const { laptop, desktop } = await devices(async () => ({
+      success: false,
+      error: "socket closed",
+      uncertain: true,
+    }));
+    const subject = `Shared ${Date.now()}`;
+    const created = await laptop.createDraft({ to: ["to@example.com"], subject, body: "Body" });
+    expect(created.success).toBe(true);
+    const draftId = created.draft!.draftId;
+
+    const listed = await desktop.listDrafts();
+    expect(listed.drafts?.find((draft) => draft.draftId === draftId)?.subject).toBe(subject);
+
+    await laptop.sendDraft(draftId, created.draft!.revision);
+    expect((await desktop.getDraft(draftId)).draft?.deliveryState).toBe("needs_review");
+    expect(await desktop.resolveUncertainSend(draftId, "not_sent")).toMatchObject({
+      success: true,
+    });
+    expect((await laptop.getDraft(draftId)).draft?.deliveryState).toBe("draft");
+    expect((await laptop.deleteDraft(draftId)).success).toBe(true);
   });
 });

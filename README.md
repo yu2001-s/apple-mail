@@ -1,13 +1,33 @@
 # iCloud Mail
 
-One Codex Plugin for direct iCloud IMAP/SMTP access. It searches and reads mail,
-creates synchronized drafts, resolves threaded replies, and applies saved
+A direct iCloud IMAP/SMTP connector for Claude and Codex. It searches and reads
+mail, creates synchronized drafts, resolves threaded replies, and applies saved
 sender signatures. It does not launch Mail.app or use AppleScript.
 
-The bundled runtime and minimal Skill live in `plugins/icloud-mail/`. Only this
-connector is listed in the repository marketplace.
+The bundled runtime and minimal Skill live in `plugins/icloud-mail/`. The same
+bundle runs several ways:
 
-## Install
+| Where | How | Guide |
+| --- | --- | --- |
+| Claude Code, on each Mac | Plugin from this repository's marketplace | below |
+| Codex | Personal Codex Plugin | below |
+| Claude and ChatGPT on every device | Cloudflare Worker with OAuth | [docs/WORKER.md](docs/WORKER.md) |
+| Same, on your own machine | Remote MCP server with OAuth | [docs/REMOTE.md](docs/REMOTE.md) |
+
+## Install in Claude Code
+
+```sh
+claude plugin marketplace add yu2001-s/apple-mail
+claude plugin install icloud-mail@icloud-mail
+```
+
+Repeat on each machine; `claude plugin marketplace update icloud-mail` picks up
+new releases. The plugin starts the server through `server/launch.sh`, which
+finds Node.js 20+ in `PATH` or the usual Homebrew, Volta and nvm locations
+(`ICLOUD_MAIL_NODE` selects one explicitly). Each machine needs the account
+configuration described in [docs/IMAP-SETUP.md](docs/IMAP-SETUP.md).
+
+## Install in Codex
 
 The checked-in bundle includes its dependencies; installation needs Node.js 20+
 without an npm install:
@@ -27,9 +47,14 @@ read-only verification. Start a new chat after installing or updating.
 
 Account configuration remains in
 `~/Library/Application Support/apple-mail-mcp/config.json`, with passwords in
-macOS Keychain. Primary address, signatures, and draft IDs/revisions remain in
-`~/.codex/integrations/icloud-mail/preferences.json` and `drafts.json`. These are
-user data, separate from the plugin package. Keep them across upgrades.
+macOS Keychain. Primary address and signatures remain in
+`~/.codex/integrations/icloud-mail/preferences.json`. These are user data,
+separate from the plugin package. Keep them across upgrades.
+
+Drafts live on iCloud: each managed draft carries its ID in a header, so every
+device and the remote server see the same drafts, revisions and send state. The
+adjacent `drafts.json` is a per-device cache that can be rebuilt from the
+server.
 
 ## Develop
 
@@ -40,15 +65,20 @@ pnpm build:plugin
 pnpm test
 ```
 
-`src/icloud/server.ts` is the only MCP entrypoint. The shared IMAP, SMTP, MIME,
-and draft modules remain under `src/`. `pnpm build:plugin` builds the standalone
-bundle directly from these sources and records its SHA-256 and source inputs.
-It does not read an older installed connector. After changing source, rebuild
-and run the installer to update the personal source and cache copy.
+`src/icloud/server.ts` is the MCP entrypoint: it serves the tools from
+`tools.ts` over stdio, or over HTTP (`http.ts`, `oauth.ts`) with `--http`.
+`src/worker/index.ts` serves the same tools from a Cloudflare Worker. The
+shared IMAP, SMTP, MIME, and draft modules remain under `src/`.
+`pnpm build:plugin` builds the standalone bundle directly from these sources and
+records its SHA-256 and source inputs. It does not read an older installed
+connector. After changing source, rebuild and reinstall or update the plugin.
 
 The standalone boot test copies the plugin into a temporary directory with no
-`node_modules`, uses synthetic preferences, and checks MCP discovery and
-signature retrieval without contacting iCloud. For live validation:
+`node_modules`, starts it through the plugin launcher with synthetic
+preferences, and checks MCP discovery and signature retrieval without contacting
+iCloud. The HTTP test runs the full OAuth flow against the bundle, and
+`pnpm test:worker` does the same for the Worker in local workerd. For live
+validation:
 
 ```sh
 node scripts/verify-icloud-plugin.mjs

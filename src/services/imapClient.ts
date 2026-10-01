@@ -22,7 +22,7 @@
  *
  * @module services/imapClient
  */
-import { ImapFlow } from "imapflow";
+import { ImapFlow } from "@/services/imapFlow.js";
 import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
@@ -404,7 +404,8 @@ export function resolveImapConfig(
   return specToConfig(spec);
 }
 
-const defaultConnect: ImapConnect = async (cfg) => {
+/** Open one authenticated IMAP connection (the production connector). */
+export const connectImap: ImapConnect = async (cfg) => {
   const client = new ImapFlow({
     host: cfg.host,
     port: cfg.port,
@@ -723,7 +724,7 @@ function errText(e: unknown): string {
 // before reuse; an idle timer closes it after inactivity. An injected
 // `deps.connect` (tests) bypasses the pool and connects per call.
 // ---------------------------------------------------------------------------
-let poolConnect: ImapConnect = defaultConnect;
+let poolConnect: ImapConnect = connectImap;
 interface PoolEntry {
   client: ImapClientLike;
   idle?: NodeJS.Timeout;
@@ -851,7 +852,7 @@ export async function imapHealthCheck(
 
 /** Test seam: override the pool's connect factory; pass null to restore. */
 export function __setPoolConnect(fn: ImapConnect | null): void {
-  poolConnect = fn ?? defaultConnect;
+  poolConnect = fn ?? connectImap;
 }
 /** Test seam: close and clear all pooled connections. */
 export async function __resetPool(): Promise<void> {
@@ -1016,6 +1017,31 @@ export interface ImapRawMessage {
   uid: number;
   uidValidity?: string;
   raw: Buffer;
+  /** Server flags and keywords, when fetched. */
+  flags?: string[];
+}
+
+/** One message that carries a given header, without its body. */
+export interface ImapHeaderMatch {
+  id: string;
+  uid: number;
+  value: string;
+  flags: string[];
+}
+
+function sourceBuffer(source: Buffer | string): Buffer {
+  return Buffer.isBuffer(source) ? source : Buffer.from(source, "utf8");
+}
+
+/** Read one unfolded header value from a fetched header block. */
+function headerValue(block: Buffer | string | undefined, name: string): string | null {
+  if (!block) return null;
+  const text = sourceBuffer(block)
+    .toString("utf8")
+    .replace(/\r?\n[ \t]+/g, " ");
+  const prefix = `${name.toLowerCase()}:`;
+  const line = text.split(/\r?\n/).find((l) => l.toLowerCase().startsWith(prefix));
+  return line ? line.slice(prefix.length).trim() : null;
 }
 
 function specialUseFlag(kind: ImapSpecialMailbox): string {
@@ -1102,14 +1128,19 @@ export async function imapFetchRawMessage(
   const ref = decodeImapId(id);
   if (!ref) throw new Error(`Not an IMAP message id: "${id}".`);
   return withMailbox(ref.path, depsForMessageRef(ref, deps), async (client) => {
-    const message = await client.fetchOne(String(ref.uid), { source: true }, { uid: true });
+    const message = await client.fetchOne(
+      String(ref.uid),
+      { source: true, flags: true },
+      { uid: true }
+    );
     if (!message || !message.source) return null;
     return {
       id,
       account: ref.account,
       path: ref.path,
       uid: ref.uid,
-      raw: Buffer.isBuffer(message.source) ? message.source : Buffer.from(message.source, "utf8"),
+      raw: sourceBuffer(message.source),
+      flags: [...(message.flags ?? [])],
     };
   });
 }
@@ -1126,15 +1157,60 @@ export async function imapFindRawMessageByHeader(
       const found = await client.search({ header: { [header.name]: header.value } }, { uid: true });
       const uid = (Array.isArray(found) ? found : []).at(-1);
       if (!uid) return null;
-      const message = await client.fetchOne(String(uid), { source: true }, { uid: true });
+      const message = await client.fetchOne(
+        String(uid),
+        { source: true, flags: true },
+        { uid: true }
+      );
       if (!message || !message.source) return null;
       return {
         id: encodeImapId(cfg.accountLabel, path, uid),
         account: cfg.accountLabel,
         path,
         uid,
-        raw: Buffer.isBuffer(message.source) ? message.source : Buffer.from(message.source, "utf8"),
+        raw: sourceBuffer(message.source),
+        flags: [...(message.flags ?? [])],
       };
+    } finally {
+      lock.release();
+    }
+  });
+}
+
+/**
+ * List the newest messages in a special-use mailbox that carry `headerName`.
+ * Fetches only that header and the flags; servers differ on whether a HEADER
+ * search with an empty value matches, so filtering happens locally.
+ */
+export async function imapListMessagesWithHeader(
+  kind: ImapSpecialMailbox,
+  headerName: string,
+  deps: ImapDeps = {},
+  scanLimit = 500
+): Promise<ImapHeaderMatch[]> {
+  return withClient(deps, async (client, cfg) => {
+    const path = await resolveSpecialMailboxPath(client, kind);
+    const lock = await client.getMailboxLock(path);
+    try {
+      const found = await client.search({ all: true }, { uid: true });
+      const uids = (Array.isArray(found) ? found : []).slice(-scanLimit);
+      const matches: ImapHeaderMatch[] = [];
+      if (!uids.length) return matches;
+      for await (const message of client.fetch(
+        uids.join(","),
+        { headers: [headerName], flags: true },
+        { uid: true }
+      )) {
+        const value = headerValue(message.headers, headerName);
+        if (!value) continue;
+        matches.push({
+          id: encodeImapId(cfg.accountLabel, path, message.uid),
+          uid: message.uid,
+          value,
+          flags: [...(message.flags ?? [])],
+        });
+      }
+      return matches.sort((a, b) => a.uid - b.uid);
     } finally {
       lock.release();
     }
@@ -1294,6 +1370,13 @@ function flagOp(id: string, flag: string, add: boolean, deps: ImapDeps): Promise
   });
 }
 
+/** Add or remove one IMAP keyword (for example a connector state marker). */
+export const imapSetKeyword = (
+  id: string,
+  keyword: string,
+  enabled: boolean,
+  deps: ImapDeps = {}
+): Promise<ImapOpResult> => flagOp(id, keyword, enabled, deps);
 export const imapMarkRead = (id: string, deps = {}): Promise<ImapOpResult> =>
   flagOp(id, "\\Seen", true, deps);
 export const imapMarkUnread = (id: string, deps = {}): Promise<ImapOpResult> =>

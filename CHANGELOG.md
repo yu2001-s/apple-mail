@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0 — 2026-10-01
+
+- Package the connector as a Claude Code plugin with a repository
+  marketplace, alongside the Codex Plugin.
+- Start the server through a portable launcher that finds Node.js 20+ instead
+  of a hard-coded Homebrew path.
+- Treat the iCloud Drafts mailbox as the source of truth: drafts from other
+  devices are recovered by their ID header, a `$IcloudMailSending` keyword
+  blocks duplicate sends across devices, and a Sent Message-ID check prevents
+  resending a draft whose cleanup failed.
+- Add a remote Streamable HTTP mode with a built-in single-owner OAuth 2.1
+  server for claude.ai custom connectors, plus Docker and Cloudflare Tunnel
+  deployment files.
+- Accept inline base64 attachments; remote callers cannot attach server files.
+- Deploy as a Cloudflare Worker (`scripts/setup-worker.mjs`): OAuth through
+  `@cloudflare/workers-oauth-provider` with dynamic registration for Claude and
+  Client ID Metadata Documents for ChatGPT, secrets loaded from the existing
+  Keychain configuration, and no per-device installation.
+- Accept ChatGPT connector OAuth callbacks alongside Claude's.
+- Fix an ImapFlow lost-wakeup race that stalled the first command after login
+  in the Workers runtime.
+
 ## 1.2.1 — 2026-10-01
 
 - Consolidate on the direct iCloud Mail Plugin; remove the obsolete Apple Mail

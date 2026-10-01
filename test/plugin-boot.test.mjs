@@ -29,11 +29,20 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
     JSON.stringify({ primaryAddress: sender, signatures: { [sender]: signature } })
   );
   writeFileSync(join(temp, "config.json"), "{}");
-  const child = spawn(process.execPath, [join(plugin, "server/server.cjs")], {
+  const claudeManifest = JSON.parse(
+    readFileSync(join(plugin, ".claude-plugin/plugin.json"), "utf8")
+  );
+  assert.equal(claudeManifest.version, manifest.version);
+  const launch = claudeManifest.mcpServers["icloud-mail"];
+  assert.deepEqual(launch.args, ["${CLAUDE_PLUGIN_ROOT}/server/launch.sh"]);
+  // Start through the same launcher Claude Code and Codex use.
+  const args = launch.args.map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", plugin));
+  const child = spawn(launch.command, args, {
     cwd: temp,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
+      ICLOUD_MAIL_NODE: process.execPath,
       ICLOUD_MAIL_DATA_DIR: temp,
       APPLE_MAIL_MCP_CONFIG_FILE: join(temp, "config.json"),
       APPLE_MAIL_MCP_IMAP_HOST: "imap.mail.me.com",

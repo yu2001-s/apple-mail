@@ -19,8 +19,22 @@ uses the corresponding `*_KEYCHAIN_SERVICE` and `*_KEYCHAIN_ACCOUNT` entries.
 
 `~/.codex/integrations/icloud-mail/preferences.json` supplies `primaryAddress`
 and a `signatures` object keyed by sender address. The primary address must be
-one of the configured sending addresses. The adjacent `drafts.json` registry
-preserves managed draft IDs, revisions, and send states.
+one of the configured sending addresses. The adjacent `drafts.json` caches
+managed draft IDs, revisions, and send states; the server's Drafts mailbox is
+authoritative, so another device's drafts are recovered from their ID header.
+
+## Another Mac
+
+Copy `config.json` and `preferences.json` to the same paths, then store the
+Apple app-specific password under the Keychain service and account names that
+`config.json` references:
+
+```sh
+security add-generic-password -s <KEYCHAIN_SERVICE> -a <KEYCHAIN_ACCOUNT> -w
+```
+
+Without Keychain (for example on Linux), set `APPLE_MAIL_MCP_IMAP_PASSWORD` and
+`APPLE_MAIL_MCP_SMTP_PASSWORD` instead.
 
 Use the `health_check` tool to verify IMAP and SMTP authentication without
 sending. For end-to-end search and reply-preview verification, run

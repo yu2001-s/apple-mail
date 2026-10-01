@@ -3,6 +3,8 @@ build/
 coverage/
 .env
 .env.*
+deploy/*.env
+deploy/data/
 *.log
 *.tgz
 .DS_Store
@@ -11,3 +13,5 @@ Thumbs.db
 .idea/
 .claude/*
 !.claude/settings.json
+.wrangler/
+.dev.vars*

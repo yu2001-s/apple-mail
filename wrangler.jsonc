@@ -1,0 +1,22 @@
+// Cloudflare Worker deployment of the iCloud Mail connector. See docs/WORKER.md.
+// Personal values (addresses, passwords, signatures, owner password) are Worker
+// secrets set by scripts/setup-worker.mjs, never committed here.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "icloud-mail",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-15",
+  // node:net/node:tls for IMAP and SMTP; strictly public fetches for CIMD documents.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // Kept in step with package.json by scripts/sync-plugin-version.mjs.
+  "define": { "CONNECTOR_VERSION": "\"1.3.0\"" },
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  "vars": {
+    "APPLE_MAIL_MCP_IMAP_HOST": "imap.mail.me.com",
+    "APPLE_MAIL_MCP_IMAP_PORT": "993",
+    "APPLE_MAIL_MCP_SMTP_HOST": "smtp.mail.me.com",
+    "APPLE_MAIL_MCP_SMTP_PORT": "587",
+    "APPLE_MAIL_MCP_SMTP_SECURE": "false"
+  },
+  "observability": { "enabled": true }
+}

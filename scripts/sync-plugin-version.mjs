@@ -9,9 +9,24 @@ const mismatches = [];
 update("plugins/icloud-mail/.codex-plugin/plugin.json", (data) => {
   data.version = version;
 });
-update(".agents/plugins/marketplace.json", (data) => {
-  for (const plugin of data.plugins) if (plugin.name === "icloud-mail") plugin.version = version;
+update("plugins/icloud-mail/.claude-plugin/plugin.json", (data) => {
+  data.version = version;
 });
+for (const catalog of [".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json"])
+  update(catalog, (data) => {
+    for (const plugin of data.plugins) if (plugin.name === "icloud-mail") plugin.version = version;
+  });
+// wrangler.jsonc has comments, so its version is replaced textually.
+{
+  const filename = path.join(root, "wrangler.jsonc");
+  const original = fs.readFileSync(filename, "utf8");
+  const next = original.replace(/("CONNECTOR_VERSION": "\\")[^\\"]*(\\"")/, `$1${version}$2`);
+  if (!/"CONNECTOR_VERSION": "\\"/.test(original)) mismatches.push("wrangler.jsonc (define)");
+  else if (next !== original) {
+    if (checkMode) mismatches.push("wrangler.jsonc");
+    else fs.writeFileSync(filename, next);
+  }
+}
 if (checkMode && mismatches.length) {
   console.error(`Plugin versions differ from package.json (${version}): ${mismatches.join(", ")}`);
   process.exitCode = 1;

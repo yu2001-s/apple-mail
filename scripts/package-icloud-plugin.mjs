@@ -14,6 +14,16 @@ assert.equal(manifest.version, version, "Run node scripts/sync-plugin-version.mj
 assert.equal(catalog.plugins.length, 1, "Only the iCloud connector belongs in this marketplace");
 assert.equal(catalog.plugins[0].name, manifest.name);
 assert.equal(catalog.plugins[0].version, version);
+for (const [file, entries] of [
+  [".claude-plugin/plugin.json", (data) => [data]],
+  ["../../.claude-plugin/marketplace.json", (data) => data.plugins],
+]) {
+  const data = JSON.parse(readFileSync(join(target, file), "utf8"));
+  for (const entry of entries(data)) {
+    assert.equal(entry.name, manifest.name, `${file} must describe ${manifest.name}`);
+    assert.equal(entry.version, version, "Run node scripts/sync-plugin-version.mjs");
+  }
+}
 mkdirSync(join(target, "server"), { recursive: true });
 const result = await build({
   absWorkingDir: root,

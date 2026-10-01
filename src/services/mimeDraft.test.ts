@@ -2,12 +2,25 @@ import { describe, expect, it } from "vitest";
 import {
   composeDraftMime,
   DRAFT_ID_HEADER,
+  draftIdFromMime,
   draftMimeRevision,
   parseDraftMime,
   prepareDraftMimeForSend,
 } from "@/services/mimeDraft.js";
 
 describe("draft MIME composition", () => {
+  it("reads the connector draft id back from the stored headers only", async () => {
+    const raw = await composeDraftMime({
+      draftUuid: "00000000-0000-4000-8000-0000000000aa",
+      from: "sender@example.com",
+      to: ["to@example.com"],
+      subject: "Id",
+      body: `${DRAFT_ID_HEADER}: not-a-header`,
+    });
+    expect(draftIdFromMime(raw)).toBe("00000000-0000-4000-8000-0000000000aa");
+    expect(draftIdFromMime(prepareDraftMimeForSend(raw))).toBeUndefined();
+  });
+
   it("round-trips folded reply references and retains them on the delivered MIME", async () => {
     const references = Array.from({ length: 8 }, (_, i) => `<conversation-${i}@example.com>`);
     const raw = await composeDraftMime({

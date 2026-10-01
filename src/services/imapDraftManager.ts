@@ -8,13 +8,17 @@ import {
   imapDeleteExactMessage,
   imapFetchRawMessage,
   imapFindRawMessageByHeader,
+  imapListMessagesWithHeader,
+  imapSetKeyword,
   isImapAccount,
   decodeImapId,
   type ImapDeps,
+  type ImapRawMessage,
 } from "@/services/imapClient.js";
 import {
   composeDraftMime,
   DRAFT_ID_HEADER,
+  draftIdFromMime,
   draftMimeRevision,
   mimeAttachmentsForResource,
   parseDraftMime,
@@ -32,6 +36,14 @@ import { z } from "zod";
 
 const DRAFT_PREFIX = "apple-draft:";
 
+/**
+ * IMAP keyword left on a server draft while its SMTP submission is pending or
+ * uncertain. Every device reads it, so a second device will not resend.
+ */
+export const SENDING_KEYWORD = "$IcloudMailSending";
+const REMOTE_SENDING_WARNING =
+  "Another device started sending this draft and its outcome is unknown. Verify Sent before taking further action.";
+
 interface ImapDraftRegistryEntry {
   imapId: string;
   account: string;
@@ -47,6 +59,16 @@ interface ImapDraftRegistryEntry {
   smtpMessageId?: string;
   sentImapId?: string;
   warning?: string;
+  /** Whether SENDING_KEYWORD was set on the server copy by this device. */
+  remoteMarked?: boolean;
+}
+
+interface CurrentDraft {
+  raw: Buffer;
+  imapId: string;
+  revision: string;
+  /** The server copy carries SENDING_KEYWORD. */
+  remoteSending: boolean;
 }
 
 interface ImapDraftRegistry {
@@ -105,7 +127,12 @@ export interface ImapDraftResult {
 }
 
 export interface ImapDraftManagerOptions {
-  registryPath?: string;
+  /**
+   * Where the draft cache is persisted. `null` keeps it in memory for this
+   * manager's lifetime, which suits a stateless server: the Drafts mailbox
+   * and its send markers carry everything needed to recover.
+   */
+  registryPath?: string | null;
   resolveIdentity: (selector?: string) => SendingIdentity | null;
   imapDeps?: (account: string) => ImapDeps;
   imapAccount?: (identity: SendingIdentity) => string;
@@ -139,7 +166,8 @@ function draftUuid(draftId: string): string {
 }
 
 export class ImapDraftManager {
-  private readonly registryPath: string;
+  private readonly registryPath: string | null;
+  private memory: ImapDraftRegistry = emptyRegistry();
   private readonly identityResolver: (selector?: string) => SendingIdentity | null;
   private readonly depsForAccount: (account: string) => ImapDeps;
   private readonly accountForIdentity?: (identity: SendingIdentity) => string;
@@ -149,7 +177,8 @@ export class ImapDraftManager {
   private readonly selfAddresses: string[];
 
   constructor(options: ImapDraftManagerOptions) {
-    this.registryPath = options.registryPath ?? defaultRegistryPath();
+    this.registryPath =
+      options.registryPath === undefined ? defaultRegistryPath() : options.registryPath;
     this.identityResolver = options.resolveIdentity;
     this.depsForAccount = options.imapDeps ?? ((account) => ({ account }));
     this.accountForIdentity = options.imapAccount;
@@ -166,6 +195,7 @@ export class ImapDraftManager {
   }
 
   private load(): ImapDraftRegistry {
+    if (this.registryPath === null) return structuredClone(this.memory);
     if (!existsSync(this.registryPath)) return emptyRegistry();
     try {
       const parsed = JSON.parse(readFileSync(this.registryPath, "utf8")) as ImapDraftRegistry;
@@ -182,7 +212,21 @@ export class ImapDraftManager {
     }
   }
 
+  /** Apply `change` to one cached entry, if it still exists, and persist it. */
+  private patch(uuid: string, change: (entry: ImapDraftRegistryEntry) => void): void {
+    const registry = this.load();
+    const entry = registry.drafts[uuid];
+    if (!entry) return;
+    change(entry);
+    entry.updatedAt = new Date().toISOString();
+    this.save(registry);
+  }
+
   private save(registry: ImapDraftRegistry): void {
+    if (this.registryPath === null) {
+      this.memory = structuredClone(registry);
+      return;
+    }
     mkdirSync(dirname(this.registryPath), { recursive: true });
     const tmp = `${this.registryPath}.${process.pid}.tmp`;
     writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, {
@@ -243,10 +287,115 @@ export class ImapDraftManager {
     }
   }
 
+  private defaultAccount(): string | null {
+    try {
+      return this.imapAccountFor(this.identityFor());
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The local registry is only a cache. A draft created or edited on another
+   * device is recovered from its server copy through the connector draft header.
+   */
+  private async resolveEntry(uuid: string): Promise<ImapDraftRegistryEntry | null> {
+    if (!uuid) return null;
+    const cached = this.load().drafts[uuid];
+    if (cached) return cached;
+    const account = this.defaultAccount();
+    if (!account) return null;
+    const found = await imapFindRawMessageByHeader(
+      "drafts",
+      { name: DRAFT_ID_HEADER, value: uuid },
+      this.depsForAccount(account)
+    );
+    return found ? this.adopt(uuid, found, account) : null;
+  }
+
+  /** Cache a server draft this device has not seen before. */
+  private adopt(
+    uuid: string,
+    found: ImapRawMessage,
+    account: string
+  ): ImapDraftRegistryEntry | null {
+    if (draftIdFromMime(found.raw) !== uuid) return null;
+    const parsed = parseDraftMime(found.raw);
+    const email = senderEmail(parsed.from);
+    const identity = this.identityResolver(email);
+    const sending = (found.flags ?? []).includes(SENDING_KEYWORD);
+    const registry = this.load();
+    registry.drafts[uuid] ??= {
+      imapId: found.id,
+      account,
+      identityId: identity?.identityId ?? email,
+      fromEmail: identity?.email ?? email,
+      identitySender: identity?.sender,
+      identityAccountId: identity?.accountId,
+      identityAccountName: identity?.accountName,
+      revision: draftMimeRevision(found.raw),
+      messageId: parsed.messageId,
+      updatedAt: new Date().toISOString(),
+      state: sending ? "needs_review" : "draft",
+      warning: sending ? REMOTE_SENDING_WARNING : undefined,
+      remoteMarked: sending,
+    };
+    this.save(registry);
+    return registry.drafts[uuid];
+  }
+
+  /**
+   * Reconcile the cached send state with the marker devices leave on the
+   * server copy: a marker means another device's send is unresolved, and a
+   * marker this device set that has disappeared was resolved elsewhere.
+   */
+  private reconcileState(
+    uuid: string,
+    entry: ImapDraftRegistryEntry,
+    current: CurrentDraft
+  ): ImapDraftRegistryEntry["state"] {
+    if (current.remoteSending && entry.state === "draft") {
+      this.patch(uuid, (latest) => {
+        latest.state = "needs_review";
+        latest.warning = REMOTE_SENDING_WARNING;
+        latest.remoteMarked = true;
+      });
+      return "needs_review";
+    }
+    if (!current.remoteSending && entry.state === "needs_review" && entry.remoteMarked) {
+      this.patch(uuid, (latest) => {
+        latest.state = "draft";
+        latest.warning = undefined;
+        latest.remoteMarked = false;
+      });
+      return "draft";
+    }
+    return entry.state;
+  }
+
+  /** Find a Sent copy of a draft whose server copy is gone, e.g. sent elsewhere. */
+  private async findSentCopy(entry: ImapDraftRegistryEntry): Promise<ImapRawMessage | null> {
+    if (!entry.messageId) return null;
+    return imapFindRawMessageByHeader(
+      "sent",
+      { name: "Message-ID", value: entry.messageId },
+      this.depsForAccount(entry.account)
+    ).catch(() => null);
+  }
+
+  private markSent(uuid: string, sentCopy: ImapRawMessage, warning?: string): void {
+    this.patch(uuid, (latest) => {
+      latest.state = "sent";
+      latest.sentImapId = sentCopy.id;
+      latest.warning = warning;
+      latest.remoteMarked = false;
+    });
+  }
+
   private async fetchCurrent(
     uuid: string,
     entry: ImapDraftRegistryEntry
-  ): Promise<{ raw: Buffer; imapId: string; revision: string } | null> {
+  ): Promise<CurrentDraft | null> {
     const deps = this.depsForAccount(entry.account);
     let current = await imapFetchRawMessage(entry.imapId, deps);
     if (!current) {
@@ -266,16 +415,17 @@ export class ImapDraftManager {
     if (!current) return null;
     const revision = draftMimeRevision(current.raw);
     if (current.id !== entry.imapId || revision !== entry.revision) {
-      const registry = this.load();
-      const latest = registry.drafts[uuid];
-      if (latest) {
+      this.patch(uuid, (latest) => {
         latest.imapId = current.id;
         latest.revision = revision;
-        latest.updatedAt = new Date().toISOString();
-        this.save(registry);
-      }
+      });
     }
-    return { raw: current.raw, imapId: current.id, revision };
+    return {
+      raw: current.raw,
+      imapId: current.id,
+      revision,
+      remoteSending: (current.flags ?? []).includes(SENDING_KEYWORD),
+    };
   }
 
   private toDraft(
@@ -312,16 +462,32 @@ export class ImapDraftManager {
 
   async listDrafts(): Promise<{ success: boolean; drafts?: Draft[]; error?: string }> {
     try {
-      const registry = this.load();
+      const account = this.defaultAccount();
+      const uuids = new Set<string>();
+      // The server is authoritative: list every connector draft, including
+      // those created on other devices, then any cached ones in other accounts.
+      if (account) {
+        const matches = await imapListMessagesWithHeader(
+          "drafts",
+          DRAFT_ID_HEADER,
+          this.depsForAccount(account)
+        );
+        for (const match of matches) uuids.add(match.value);
+      }
+      for (const [uuid, entry] of Object.entries(this.load().drafts)) {
+        if (entry.state !== "sent" && entry.account !== account) uuids.add(uuid);
+      }
       const drafts: Draft[] = [];
-      for (const [uuid, entry] of Object.entries(registry.drafts)) {
-        if (entry.state === "sent") continue;
+      for (const uuid of uuids) {
+        const entry = await this.resolveEntry(uuid);
+        if (!entry || entry.state === "sent") continue;
         const current = await this.fetchCurrent(uuid, entry);
         if (!current) continue;
+        const state = this.reconcileState(uuid, entry, current);
         drafts.push(
           this.toDraft(
             `${DRAFT_PREFIX}${uuid}`,
-            { ...entry, revision: current.revision },
+            { ...entry, state, revision: current.revision },
             current.raw,
             current.imapId
           )
@@ -336,24 +502,34 @@ export class ImapDraftManager {
   async getDraft(draftId: string): Promise<ImapDraftResult> {
     try {
       const uuid = draftUuid(draftId);
-      const entry = this.load().drafts[uuid];
+      const entry = await this.resolveEntry(uuid);
       if (!entry) return { success: false, error: `Draft "${draftId}" was not found.` };
       const current = await this.fetchCurrent(uuid, entry);
       if (!current) {
+        const sentCopy = entry.state === "sent" ? null : await this.findSentCopy(entry);
+        if (sentCopy) {
+          this.markSent(uuid, sentCopy);
+          return {
+            success: false,
+            error: `Draft "${draftId}" was already sent, possibly from another device.`,
+            sentMessageId: sentCopy.id,
+          };
+        }
         return {
           success: false,
           error: `Draft "${draftId}" no longer exists in the server Drafts mailbox.`,
         };
       }
+      const state = this.reconcileState(uuid, entry, current);
       return {
         success: true,
         draft: this.toDraft(
           draftId,
-          { ...entry, revision: current.revision },
+          { ...entry, state, revision: current.revision },
           current.raw,
           current.imapId
         ),
-        warning: entry.warning,
+        warning: state === entry.state ? entry.warning : this.load().drafts[uuid]?.warning,
         smtpMessageId: entry.smtpMessageId,
         sentMessageId: entry.sentImapId,
       };
@@ -484,10 +660,9 @@ export class ImapDraftManager {
   async updateDraft(draftId: string, update: ImapDraftUpdate): Promise<ImapDraftResult> {
     try {
       const uuid = draftUuid(draftId);
-      const registry = this.load();
-      const entry = registry.drafts[uuid];
+      const entry = await this.resolveEntry(uuid);
       if (!entry) return { success: false, error: `Draft "${draftId}" was not found.` };
-      if (entry.state !== "draft") {
+      if (entry.state !== "draft" && entry.state !== "needs_review") {
         return {
           success: false,
           error: `Draft "${draftId}" is ${entry.state} and cannot be edited automatically.`,
@@ -496,6 +671,13 @@ export class ImapDraftManager {
       const current = await this.fetchCurrent(uuid, entry);
       if (!current) {
         return { success: false, error: `Draft "${draftId}" was not found on the IMAP server.` };
+      }
+      const state = this.reconcileState(uuid, entry, current);
+      if (state !== "draft") {
+        return {
+          success: false,
+          error: `Draft "${draftId}" is ${state} and cannot be edited automatically.`,
+        };
       }
       if (update.expectedRevision && update.expectedRevision !== current.revision) {
         return {
@@ -590,15 +772,14 @@ export class ImapDraftManager {
   async sendDraft(draftId: string, expectedRevision?: string): Promise<ImapDraftResult> {
     try {
       const uuid = draftUuid(draftId);
-      let registry = this.load();
-      const entry = registry.drafts[uuid];
+      let registry: ImapDraftRegistry;
+      const entry = await this.resolveEntry(uuid);
       if (!entry) return { success: false, error: `Draft "${draftId}" was not found.` };
-      if (entry.state === "sending" || entry.state === "needs_review") {
-        return {
-          success: false,
-          error: `Draft "${draftId}" previously entered the sending state. It was not retried to avoid a duplicate; verify Sent before taking further action.`,
-        };
-      }
+      const duplicateRisk = {
+        success: false,
+        error: `Draft "${draftId}" previously entered the sending state. It was not retried to avoid a duplicate; verify Sent before taking further action.`,
+      };
+      if (entry.state === "sending") return duplicateRisk;
       if (entry.state === "sent") {
         return {
           success: true,
@@ -609,15 +790,38 @@ export class ImapDraftManager {
       }
       const current = await this.fetchCurrent(uuid, entry);
       if (!current) {
+        const sentCopy = await this.findSentCopy(entry);
+        if (sentCopy) {
+          this.markSent(uuid, sentCopy);
+          return {
+            success: true,
+            sentMessageId: sentCopy.id,
+            warning:
+              "This draft was already sent, possibly from another device; no second SMTP submission occurred.",
+          };
+        }
         return { success: false, error: `Draft "${draftId}" was not found on the IMAP server.` };
       }
+      const parsed = parseDraftMime(current.raw);
+      const deps = this.depsForAccount(entry.account);
+      // A Sent copy with this Message-ID means some device already submitted
+      // it and only its Drafts cleanup failed.
+      const priorSend = await this.findSentCopy({ ...entry, messageId: parsed.messageId });
+      if (priorSend) {
+        const removed = await imapDeleteExactMessage(current.imapId, deps).catch(() => false);
+        const warning = `This draft is already in Sent; no second SMTP submission occurred.${
+          removed ? "" : " The leftover Drafts copy could not be removed."
+        }`;
+        this.markSent(uuid, priorSend, warning);
+        return { success: true, sentMessageId: priorSend.id, warning };
+      }
+      if (this.reconcileState(uuid, entry, current) !== "draft") return duplicateRisk;
       if (expectedRevision && expectedRevision !== current.revision) {
         return {
           success: false,
           error: `Draft revision conflict: expected ${expectedRevision}, current revision is ${current.revision}. Read the draft again before sending.`,
         };
       }
-      const parsed = parseDraftMime(current.raw);
       const recipients = [...parsed.to, ...parsed.cc, ...parsed.bcc];
       if (recipients.length === 0) {
         return { success: false, error: `Draft "${draftId}" has no recipients.` };
@@ -641,6 +845,12 @@ export class ImapDraftManager {
       registry.drafts[uuid].state = "sending";
       registry.drafts[uuid].updatedAt = new Date().toISOString();
       this.save(registry);
+      const marked = await imapSetKeyword(current.imapId, SENDING_KEYWORD, true, deps)
+        .then((result) => result.success)
+        .catch(() => false);
+      this.patch(uuid, (latest) => {
+        latest.remoteMarked = marked;
+      });
 
       const deliverable = prepareDraftMimeForSend(current.raw);
       let sent: SmtpSendResult;
@@ -658,13 +868,20 @@ export class ImapDraftManager {
         };
       }
       if (!sent.success) {
-        registry = this.load();
-        if (registry.drafts[uuid]?.state === "sending") {
-          registry.drafts[uuid].state = sent.uncertain ? "needs_review" : "draft";
-          registry.drafts[uuid].warning = sent.error;
-          registry.drafts[uuid].updatedAt = new Date().toISOString();
-          this.save(registry);
-        }
+        // A definite rejection leaves the draft editable everywhere; an
+        // uncertain outcome keeps the server marker for every device.
+        const cleared =
+          !sent.uncertain &&
+          marked &&
+          (await imapSetKeyword(current.imapId, SENDING_KEYWORD, false, deps)
+            .then((result) => result.success)
+            .catch(() => false));
+        this.patch(uuid, (latest) => {
+          if (latest.state !== "sending") return;
+          latest.state = sent.uncertain ? "needs_review" : "draft";
+          latest.warning = sent.error;
+          if (cleared) latest.remoteMarked = false;
+        });
         return {
           success: false,
           error: sent.uncertain
@@ -758,8 +975,7 @@ export class ImapDraftManager {
   async deleteDraft(draftId: string): Promise<ImapDraftResult> {
     try {
       const uuid = draftUuid(draftId);
-      const registry = this.load();
-      const entry = registry.drafts[uuid];
+      const entry = await this.resolveEntry(uuid);
       if (!entry) return { success: false, error: `Draft "${draftId}" was not found.` };
       if (entry.state === "sending") {
         return {
@@ -797,8 +1013,7 @@ export class ImapDraftManager {
   ): Promise<ImapDraftResult> {
     try {
       const uuid = draftUuid(draftId);
-      let registry = this.load();
-      const entry = registry.drafts[uuid];
+      const entry = await this.resolveEntry(uuid);
       if (!entry) return { success: false, error: `Draft "${draftId}" was not found.` };
       if (entry.state !== "sending" && entry.state !== "needs_review") {
         return {
@@ -807,10 +1022,26 @@ export class ImapDraftManager {
         };
       }
       if (outcome === "not_sent") {
-        entry.state = "draft";
-        entry.warning = undefined;
-        entry.updatedAt = new Date().toISOString();
-        this.save(registry);
+        const current = await this.fetchCurrent(uuid, entry);
+        if (current?.remoteSending) {
+          const cleared = await imapSetKeyword(
+            current.imapId,
+            SENDING_KEYWORD,
+            false,
+            this.depsForAccount(entry.account)
+          );
+          if (!cleared.success) {
+            return {
+              success: false,
+              error: `The server send marker could not be cleared: ${cleared.error}`,
+            };
+          }
+        }
+        this.patch(uuid, (latest) => {
+          latest.state = "draft";
+          latest.warning = undefined;
+          latest.remoteMarked = false;
+        });
         return this.getDraft(draftId);
       }
 
@@ -827,7 +1058,7 @@ export class ImapDraftManager {
           () => false
         );
       }
-      registry = this.load();
+      const registry = this.load();
       if (registry.drafts[uuid]) {
         registry.drafts[uuid].state = "sent";
         registry.drafts[uuid].sentImapId = sentCopy?.id;

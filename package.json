@@ -1,8 +1,8 @@
 {
   "name": "icloud-mail-mcp",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "packageManager": "pnpm@11.9.0",
-  "description": "Direct iCloud IMAP/SMTP Codex Plugin with threaded replies and saved signatures",
+  "description": "Direct iCloud IMAP/SMTP MCP connector for Claude and Codex, local or remote, with threaded replies and saved signatures",
   "type": "module",
   "main": "plugins/icloud-mail/server/server.cjs",
   "bin": {
@@ -18,18 +18,21 @@
     "build": "tsc --noEmit && node scripts/package-icloud-plugin.mjs",
     "build:plugin": "pnpm build",
     "start": "node plugins/icloud-mail/server/server.cjs",
+    "start:http": "node plugins/icloud-mail/server/server.cjs --http",
+    "deploy:worker": "node scripts/setup-worker.mjs",
+    "test:worker": "node --test test/worker-oauth.test.mjs",
     "dev": "tsc --watch --noEmit",
-    "test": "vitest run && node --test test/plugin-boot.test.mjs",
+    "test": "vitest run && node --test test/plugin-boot.test.mjs test/http-oauth.test.mjs",
     "test:imap": "vitest run --config vitest.imap.config.ts",
     "test:all": "pnpm test && pnpm test:imap",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage && node --test test/plugin-boot.test.mjs",
+    "test:coverage": "vitest run --coverage && node --test test/plugin-boot.test.mjs test/http-oauth.test.mjs",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
     "format": "prettier --write src",
     "format:check": "prettier --check src",
     "typecheck": "tsc --noEmit",
-    "version": "node scripts/sync-plugin-version.mjs && git add .agents/plugins plugins/icloud-mail",
+    "version": "node scripts/sync-plugin-version.mjs && git add .agents/plugins .claude-plugin plugins/icloud-mail wrangler.jsonc",
     "prepublishOnly": "pnpm run lint && pnpm test && pnpm run build",
     "prepare": "husky; pnpm run build"
   },
@@ -39,6 +42,7 @@
     "imap",
     "smtp",
     "mcp",
+    "claude",
     "codex",
     "macos"
   ],
@@ -55,17 +59,18 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "os": [
-    "darwin"
-  ],
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
     "imapflow": "^1.4.1",
     "nodemailer": "^9.0.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.0.0",
     "@types/nodemailer": "^8.0.1",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
@@ -79,7 +84,8 @@
     "prettier": "^3.0.0",
     "typescript": "^5.0.0",
     "typescript-eslint": "^8.51.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "wrangler": "^4.145.0"
   },
   "volta": {
     "node": "24.17.0"

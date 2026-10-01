@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ImapDraftManager, type ImapDraftManagerOptions } from "@/services/imapDraftManager.js";
+import {
+  ImapDraftManager,
+  SENDING_KEYWORD,
+  type ImapDraftManagerOptions,
+} from "@/services/imapDraftManager.js";
 import type { ImapClientLike, ImapConfig } from "@/services/imapClient.js";
 import type { SendingIdentity } from "@/types.js";
 import { encodeImapId } from "@/services/imapClient.js";
@@ -33,8 +37,10 @@ function fakeImap() {
     ["Drafts", new Map()],
     ["Sent", new Map()],
   ]);
+  const flags = new Map<number, Set<string>>();
   let selected = "Drafts";
   let nextUid = 1;
+  let refuseDelete = false;
   const client = {
     connect: async () => undefined,
     getMailboxLock: async (path: string) => {
@@ -50,12 +56,25 @@ function fakeImap() {
       const pattern = new RegExp(`^${name}:.*${value}`, "im");
       return entries.filter(([, raw]) => pattern.test(raw.toString())).map(([uid]) => uid);
     },
-    fetch: async function* () {
-      yield* [];
+    fetch: async function* (range: string, query: { headers?: string[] }) {
+      for (const uid of range.split(",").map(Number)) {
+        const raw = boxes.get(selected)?.get(uid);
+        if (!raw) continue;
+        const name = query.headers?.[0] ?? "";
+        const line = raw
+          .toString()
+          .split(/\r?\n/)
+          .find((l) => l.toLowerCase().startsWith(`${name.toLowerCase()}:`));
+        yield {
+          uid,
+          headers: Buffer.from(line ? `${line}\r\n\r\n` : "\r\n"),
+          flags: flags.get(uid),
+        };
+      }
     },
     fetchOne: async (range: string) => {
       const raw = boxes.get(selected)?.get(Number(range));
-      return raw ? { uid: Number(range), source: raw } : false;
+      return raw ? { uid: Number(range), source: raw, flags: flags.get(Number(range)) } : false;
     },
     list: async () => [
       { path: "Drafts", name: "Drafts", specialUse: "\\Drafts" },
@@ -70,15 +89,23 @@ function fakeImap() {
     mailboxCreate: async (path: string) => ({ path, created: true }),
     mailboxRename: async (path: string, newPath: string) => ({ path, newPath }),
     mailboxDelete: async (path: string) => ({ path }),
-    append: async (path: string, content: string | Buffer) => {
+    append: async (path: string, content: string | Buffer, appendFlags: string[] = []) => {
       const uid = nextUid++;
       boxes.get(path)?.set(uid, Buffer.isBuffer(content) ? content : Buffer.from(content));
+      flags.set(uid, new Set(appendFlags));
       return { destination: path, uid };
     },
-    messageFlagsAdd: async () => true,
-    messageFlagsRemove: async () => true,
+    messageFlagsAdd: async (uids: number[], added: string[]) => {
+      for (const uid of uids) for (const flag of added) flags.get(uid)?.add(flag);
+      return true;
+    },
+    messageFlagsRemove: async (uids: number[], removed: string[]) => {
+      for (const uid of uids) for (const flag of removed) flags.get(uid)?.delete(flag);
+      return true;
+    },
     messageMove: async () => true,
     messageDelete: async (uids: number[]) => {
+      if (refuseDelete) return false;
       for (const uid of uids) boxes.get(selected)?.delete(uid);
       return true;
     },
@@ -86,7 +113,14 @@ function fakeImap() {
     logout: async () => undefined,
     close: () => undefined,
   } as unknown as ImapClientLike;
-  return { client, boxes };
+  return {
+    client,
+    boxes,
+    flags,
+    refuseDeletes: (value: boolean) => {
+      refuseDelete = value;
+    },
+  };
 }
 
 function managerOptions(
@@ -437,6 +471,143 @@ describe("IMAP-backed drafts", () => {
     ).toMatchObject({
       success: true,
       draft: expect.objectContaining({ deliveryState: "draft" }),
+    });
+  });
+});
+
+describe("drafts shared across devices", () => {
+  // Two managers with separate registries model two devices on one account.
+  function devices(overrides: Partial<ImapDraftManagerOptions> = {}) {
+    const fake = fakeImap();
+    const smtpSend = vi.fn(async () => ({
+      success: true,
+      messageId: "<smtp-result@example.com>",
+    }));
+    const options = { smtpSend, ...overrides };
+    return {
+      fake,
+      smtpSend,
+      laptop: new ImapDraftManager(managerOptions(fake.client, options)),
+      desktop: new ImapDraftManager(managerOptions(fake.client, options)),
+    };
+  }
+
+  it("lists, edits and sends a draft that another device created", async () => {
+    const { fake, smtpSend, laptop, desktop } = devices();
+    const created = await laptop.createDraft({
+      to: ["to@example.com"],
+      subject: "Shared",
+      body: "From the laptop",
+    });
+    const draftId = created.draft?.draftId as string;
+
+    const listed = await desktop.listDrafts();
+    expect(listed.drafts?.map((draft) => draft.draftId)).toEqual([draftId]);
+    expect(listed.drafts?.[0].revision).toBe(created.draft?.revision);
+
+    const updated = await desktop.updateDraft(draftId, {
+      expectedRevision: created.draft?.revision,
+      body: "Edited on the desktop",
+    });
+    expect(updated.success).toBe(true);
+    expect((await laptop.getDraft(draftId)).draft?.body).toContain("Edited on the desktop");
+
+    const sent = await laptop.sendDraft(draftId, updated.draft?.revision);
+    expect(sent.success).toBe(true);
+    expect(smtpSend).toHaveBeenCalledTimes(1);
+    expect(fake.boxes.get("Drafts")?.size).toBe(0);
+  });
+
+  it("blocks a second device while a send is uncertain, until it is resolved", async () => {
+    const { laptop, desktop } = devices({
+      smtpSend: vi.fn(async () => ({ success: false, error: "socket closed", uncertain: true })),
+    });
+    const created = await laptop.createDraft({
+      to: ["to@example.com"],
+      subject: "Uncertain",
+      body: "Body",
+    });
+    const draftId = created.draft?.draftId as string;
+    await laptop.sendDraft(draftId, created.draft?.revision);
+
+    expect((await desktop.getDraft(draftId)).draft?.deliveryState).toBe("needs_review");
+    expect(await desktop.sendDraft(draftId, created.draft?.revision)).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/avoid a duplicate/i),
+    });
+    expect(await desktop.updateDraft(draftId, { body: "x" })).toMatchObject({ success: false });
+
+    expect(await desktop.resolveUncertainSend(draftId, "not_sent")).toMatchObject({
+      success: true,
+      draft: expect.objectContaining({ deliveryState: "draft" }),
+    });
+    // The laptop set the marker; seeing it cleared means another device resolved it.
+    expect((await laptop.getDraft(draftId)).draft?.deliveryState).toBe("draft");
+  });
+
+  it("clears the server marker after a definite rejection", async () => {
+    const { fake, laptop, desktop } = devices({
+      smtpSend: vi.fn(async () => ({ success: false, error: "550 rejected" })),
+    });
+    const created = await laptop.createDraft({ to: ["to@example.com"], subject: "S", body: "B" });
+    await laptop.sendDraft(created.draft?.draftId as string, created.draft?.revision);
+
+    expect([...fake.flags.values()].some((set) => set.has(SENDING_KEYWORD))).toBe(false);
+    const reread = await desktop.getDraft(created.draft?.draftId as string);
+    expect(reread.draft?.deliveryState).toBe("draft");
+  });
+
+  it("reports a draft another device already sent instead of sending it again", async () => {
+    const { smtpSend, laptop, desktop } = devices();
+    const created = await laptop.createDraft({ to: ["to@example.com"], subject: "S", body: "B" });
+    const draftId = created.draft?.draftId as string;
+    await desktop.getDraft(draftId);
+    await laptop.sendDraft(draftId, created.draft?.revision);
+
+    expect(await desktop.getDraft(draftId)).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/already sent/i),
+    });
+    const repeated = await desktop.sendDraft(draftId, created.draft?.revision);
+    expect(repeated).toMatchObject({ success: true, warning: expect.stringMatching(/already/i) });
+    expect(smtpSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resend a leftover Drafts copy whose message is already in Sent", async () => {
+    const { fake, smtpSend, laptop, desktop } = devices();
+    const created = await laptop.createDraft({ to: ["to@example.com"], subject: "S", body: "B" });
+    const draftId = created.draft?.draftId as string;
+    fake.refuseDeletes(true);
+    await laptop.sendDraft(draftId, created.draft?.revision);
+    fake.refuseDeletes(false);
+    expect(fake.boxes.get("Drafts")?.size).toBe(1);
+
+    const repeated = await desktop.sendDraft(draftId, created.draft?.revision);
+    expect(repeated).toMatchObject({ success: true, warning: expect.stringMatching(/in Sent/i) });
+    expect(smtpSend).toHaveBeenCalledTimes(1);
+    expect(fake.boxes.get("Drafts")?.size).toBe(0);
+  });
+});
+
+describe("in-memory draft cache", () => {
+  it("recovers everything from the server when each request starts empty", async () => {
+    const fake = fakeImap();
+    const fresh = () =>
+      new ImapDraftManager(
+        managerOptions(fake.client, {
+          registryPath: null,
+          smtpSend: vi.fn(async () => ({ success: false, error: "lost", uncertain: true })),
+        })
+      );
+    const created = await fresh().createDraft({ to: ["to@example.com"], subject: "S", body: "B" });
+    const draftId = created.draft?.draftId as string;
+    expect((await fresh().getDraft(draftId)).draft?.revision).toBe(created.draft?.revision);
+
+    await fresh().sendDraft(draftId, created.draft?.revision);
+    // A later request still sees the unresolved send through the server marker.
+    expect((await fresh().getDraft(draftId)).draft?.deliveryState).toBe("needs_review");
+    expect(await fresh().sendDraft(draftId, created.draft?.revision)).toMatchObject({
+      success: false,
     });
   });
 });

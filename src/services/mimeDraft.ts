@@ -182,6 +182,12 @@ export function parseDraftMime(raw: Buffer | string): ParsedDraftMime {
   };
 }
 
+/** The connector draft UUID stored in a draft's own headers, if any. */
+export function draftIdFromMime(raw: Buffer | string): string | undefined {
+  const source = Buffer.isBuffer(raw) ? raw.toString("utf8") : raw;
+  return getMimeHeader(splitHeaderBody(source).headers, DRAFT_ID_HEADER)?.trim() || undefined;
+}
+
 export function draftMimeRevision(raw: Buffer | string): string {
   return createHash("sha256")
     .update(Buffer.isBuffer(raw) ? raw : Buffer.from(raw))
