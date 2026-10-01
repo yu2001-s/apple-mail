@@ -9,6 +9,7 @@ import {
   imapFetchRawMessage,
   imapFindRawMessageByHeader,
   isImapAccount,
+  decodeImapId,
   type ImapDeps,
 } from "@/services/imapClient.js";
 import {
@@ -26,6 +27,8 @@ import {
   type SmtpConfig,
   type SmtpSendResult,
 } from "@/services/smtpMailer.js";
+import { buildReplyOptions, parseOriginalHeaders } from "@/services/replyForward.js";
+import { z } from "zod";
 
 const DRAFT_PREFIX = "apple-draft:";
 
@@ -60,6 +63,23 @@ export interface ImapDraftCreateInput {
   body: string;
   htmlBody?: string;
   attachments?: AttachmentInput[];
+  inReplyTo?: string;
+  references?: string[];
+}
+
+export interface ImapReplyInput {
+  originalMessageId: string;
+  body: string;
+  from?: string;
+  replyAll?: boolean;
+  /** Opt in to quoting the original; otherwise preserve the supplied body exactly. */
+  quoteOriginal?: boolean;
+}
+
+export interface ImapReplyPreviewResult {
+  success: boolean;
+  reply?: ImapDraftCreateInput;
+  error?: string;
 }
 
 export interface ImapDraftUpdate {
@@ -92,6 +112,8 @@ export interface ImapDraftManagerOptions {
   smtpConfig?: (identity: SendingIdentity) => SmtpConfig;
   smtpSend?: typeof sendRawViaSmtp;
   sleep?: (ms: number) => Promise<void>;
+  /** Configured aliases excluded from reply recipients. */
+  selfAddresses?: string[];
 }
 
 function defaultRegistryPath(): string {
@@ -124,6 +146,7 @@ export class ImapDraftManager {
   private readonly smtpConfigResolver: (identity: SendingIdentity) => SmtpConfig;
   private readonly smtpSend: typeof sendRawViaSmtp;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly selfAddresses: string[];
 
   constructor(options: ImapDraftManagerOptions) {
     this.registryPath = options.registryPath ?? defaultRegistryPath();
@@ -139,6 +162,7 @@ export class ImapDraftManager {
         }));
     this.smtpSend = options.smtpSend ?? sendRawViaSmtp;
     this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    this.selfAddresses = options.selfAddresses ?? [];
   }
 
   private load(): ImapDraftRegistry {
@@ -277,6 +301,8 @@ export class ImapDraftManager {
       accountName: entry.account,
       mailboxName: imapId,
       messageId: parsed.messageId ?? entry.messageId,
+      inReplyTo: parsed.inReplyTo,
+      references: parsed.references,
       hasAttachments: parsed.attachments.length > 0,
       attachments: mimeAttachmentsForResource(parsed, draftId),
       backend: "imap",
@@ -336,6 +362,70 @@ export class ImapDraftManager {
     }
   }
 
+  /** Resolve a reply from server headers without writing or sending anything. */
+  async previewReply(input: ImapReplyInput): Promise<ImapReplyPreviewResult> {
+    try {
+      const identity = this.identityFor(input.from);
+      const account = this.imapAccountFor(identity);
+      const ref = decodeImapId(input.originalMessageId);
+      if (!ref || ref.account !== account || !Number.isSafeInteger(ref.uid) || ref.uid < 1) {
+        throw new Error("Reply source must be a message in the selected IMAP account.");
+      }
+      const source = await imapFetchRawMessage(
+        input.originalMessageId,
+        this.depsForAccount(account)
+      );
+      if (!source) throw new Error("The original message was not found on the IMAP server.");
+      const original = parseOriginalHeaders(source.raw.toString("utf8"));
+      if (!original.messageId || !/^<[^<>\s]+@[^<>\s]+>$/.test(original.messageId)) {
+        throw new Error(
+          "The original message has no valid Message-ID; a threaded reply cannot be created."
+        );
+      }
+      const decoded = parseDraftMime(source.raw);
+      original.subject = decoded.subject;
+      const self = [...this.selfAddresses, identity.email];
+      const selfSet = new Set(self.map((address) => address.toLowerCase()));
+      const sentBySelf =
+        original.from.length > 0 &&
+        original.from.every((address) => selfSet.has(address.toLowerCase()));
+      const recipients = sentBySelf
+        ? original.to
+        : original.replyTo.length
+          ? original.replyTo
+          : original.from;
+      original.replyTo = recipients.filter((address) => !selfSet.has(address.toLowerCase()));
+      if (!original.replyTo.length)
+        throw new Error("The original message has no non-self reply recipient.");
+      const reply = buildReplyOptions({
+        original,
+        originalPlainText: input.quoteOriginal ? decoded.body : "",
+        body: input.body,
+        replyAll: input.replyAll ?? false,
+        self,
+        from: identity.email,
+      });
+      for (const address of [...reply.to, ...(reply.cc ?? [])]) {
+        if (!z.string().email().safeParse(address).success)
+          throw new Error("The original message contains an invalid reply address.");
+      }
+      // Message-ID values are case-sensitive. Preserve the parent's full chain.
+      reply.references = [...new Set([...original.references, original.messageId])];
+      if (reply.references.some((value) => !/^<[^<>\s]+@[^<>\s]+>$/.test(value))) {
+        throw new Error("The original message contains invalid threading headers.");
+      }
+      return { success: true, reply };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async createReplyDraft(input: ImapReplyInput): Promise<ImapDraftResult> {
+    const preview = await this.previewReply(input);
+    if (!preview.success || !preview.reply) return { success: false, error: preview.error };
+    return this.createDraft(preview.reply);
+  }
+
   async createDraft(input: ImapDraftCreateInput): Promise<ImapDraftResult> {
     try {
       const identity = this.identityFor(input.from);
@@ -351,6 +441,8 @@ export class ImapDraftManager {
         body: input.body,
         htmlBody: input.htmlBody,
         attachments: input.attachments,
+        inReplyTo: input.inReplyTo,
+        references: input.references,
       });
       const appended = await imapAppendRawMessage(
         raw,
@@ -430,6 +522,8 @@ export class ImapDraftManager {
         htmlBody: update.htmlBody === null ? undefined : (update.htmlBody ?? parsed.htmlBody),
         attachments: [...preserved, ...(update.attachmentsToAdd ?? [])],
         messageId: parsed.messageId,
+        inReplyTo: parsed.inReplyTo,
+        references: parsed.references,
       });
       const appended = await imapAppendRawMessage(
         nextRaw,

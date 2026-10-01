@@ -1,8 +1,10 @@
 {
   "name": "icloud-mail",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Direct iCloud IMAP/SMTP mail, threaded replies, reviewed drafts, and saved sender signatures.",
-  "author": { "name": "Poieti" },
+  "author": {
+    "name": "Poieti"
+  },
   "license": "MIT",
   "keywords": ["icloud", "email", "imap", "smtp", "drafts", "signatures", "macos"],
   "skills": "./skills/",
@@ -15,9 +17,9 @@
     "category": "Productivity",
     "capabilities": ["MCP Servers", "Read", "Write"],
     "defaultPrompt": [
-      "查看我的 iCloud 收件匣最近的邮件。",
-      "预览这封邮件的回覆，附上我的默认签名。",
-      "列出我可以使用的寄件地址。"
+      "\u67e5\u770b\u6211\u7684 iCloud \u6536\u4ef6\u5323\u6700\u8fd1\u7684\u90ae\u4ef6\u3002",
+      "\u9884\u89c8\u8fd9\u5c01\u90ae\u4ef6\u7684\u56de\u8986\uff0c\u9644\u4e0a\u6211\u7684\u9ed8\u8ba4\u7b7e\u540d\u3002",
+      "\u5217\u51fa\u6211\u53ef\u4ee5\u4f7f\u7528\u7684\u5bc4\u4ef6\u5730\u5740\u3002"
     ],
     "brandColor": "#4F98DA"
   }

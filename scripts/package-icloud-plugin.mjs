@@ -1,30 +1,54 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const source = resolve(process.argv[2] ?? join(homedir(), ".codex/integrations/icloud-mail"));
 const target = join(root, "plugins/icloud-mail");
+const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const manifest = JSON.parse(readFileSync(join(target, ".codex-plugin/plugin.json"), "utf8"));
-const bundle = readFileSync(join(source, "server.cjs"));
-const text = bundle.toString("utf8");
-const version = text.match(/name: "icloud-mail", version: "([^"]+)"/)?.[1];
-assert.equal(version, manifest.version, "Bundle and plugin versions must match");
-assert(!/from ["']@existing|require\(["']@existing/.test(text), "Runtime must be bundled");
-const marketplace = JSON.parse(readFileSync(join(root, ".agents/plugins/marketplace.json"), "utf8"));
-assert.equal(marketplace.plugins.find(p => p.name === manifest.name)?.version, manifest.version,
-  "Marketplace and plugin versions must match");
+const catalog = JSON.parse(readFileSync(join(root, ".agents/plugins/marketplace.json"), "utf8"));
+assert.equal(manifest.version, version, "Run node scripts/sync-plugin-version.mjs");
+assert.equal(catalog.plugins.length, 1, "Only the iCloud connector belongs in this marketplace");
+assert.equal(catalog.plugins[0].name, manifest.name);
+assert.equal(catalog.plugins[0].version, version);
 mkdirSync(join(target, "server"), { recursive: true });
-writeFileSync(join(target, "server/server.cjs"), bundle);
-copyFileSync(join(source, "UPSTREAM-LICENSE"), join(target, "LICENSE"));
-writeFileSync(join(target, "server/provenance.json"), JSON.stringify({
-  connector: "icloud-mail",
-  version,
-  sha256: createHash("sha256").update(bundle).digest("hex"),
-  runtime: "server.cjs",
-  packaging: "Unmodified standalone bundle; dependencies included; persistent data excluded",
-}, null, 2) + "\n");
-console.log(`Packaged ${manifest.name} ${version} at ${target}`);
+const result = await build({
+  absWorkingDir: root,
+  entryPoints: ["src/icloud/server.ts"],
+  outfile: "plugins/icloud-mail/server/server.cjs",
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  target: "node20",
+  define: { CONNECTOR_VERSION: JSON.stringify(version) },
+  tsconfig: "tsconfig.json",
+  metafile: true,
+  legalComments: "eof",
+});
+const sources = Object.keys(result.metafile.inputs)
+  .filter((file) => file.startsWith("src/"))
+  .sort();
+assert(
+  !sources.some((file) => /appleMailManager|applescript|jxa|hybridDraft/i.test(file)),
+  "The direct connector must not depend on Mail.app automation"
+);
+const bundle = readFileSync(join(target, "server/server.cjs"));
+copyFileSync(join(root, "LICENSE"), join(target, "LICENSE"));
+writeFileSync(
+  join(target, "server/provenance.json"),
+  JSON.stringify(
+    {
+      connector: manifest.name,
+      version,
+      sha256: createHash("sha256").update(bundle).digest("hex"),
+      runtime: "server.cjs",
+      sources,
+    },
+    null,
+    2
+  ) + "\n"
+);
+console.log(`Built ${manifest.name} ${version} from repository source.`);

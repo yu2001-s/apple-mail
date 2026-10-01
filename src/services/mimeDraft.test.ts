@@ -8,6 +8,27 @@ import {
 } from "@/services/mimeDraft.js";
 
 describe("draft MIME composition", () => {
+  it("round-trips folded reply references and retains them on the delivered MIME", async () => {
+    const references = Array.from({ length: 8 }, (_, i) => `<conversation-${i}@example.com>`);
+    const raw = await composeDraftMime({
+      draftUuid: "reply-test",
+      from: "sender@example.com",
+      to: ["to@example.com"],
+      subject: "Re: 醫療減負合作交流",
+      body: "謝謝您協助轉介！",
+      inReplyTo: references.at(-1),
+      references,
+    });
+    for (const mime of [raw, prepareDraftMimeForSend(raw)]) {
+      expect(parseDraftMime(mime)).toMatchObject({
+        inReplyTo: references.at(-1),
+        references,
+        subject: "Re: 醫療減負合作交流",
+        body: "謝謝您協助轉介！",
+      });
+    }
+  });
+
   it("round-trips unicode text, HTML, Bcc, and duplicate attachment names", async () => {
     const raw = await composeDraftMime({
       draftUuid: "00000000-0000-4000-8000-000000000001",

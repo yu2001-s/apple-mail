@@ -1,9 +1,6 @@
-name: Apple Mail source
-
+name: iCloud Mail source
 paths:
   - src
   - scripts
-
 paths-ignore:
-  - build
-  - codex/server
+  - plugins/icloud-mail/server

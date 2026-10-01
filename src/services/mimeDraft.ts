@@ -31,6 +31,8 @@ export interface ComposeDraftMimeInput {
   htmlBody?: string;
   attachments?: Array<AttachmentInput | MimeDraftAttachment>;
   messageId?: string;
+  inReplyTo?: string;
+  references?: string[];
   date?: Date;
 }
 
@@ -43,6 +45,8 @@ export interface ParsedDraftMime {
   body: string;
   htmlBody?: string;
   messageId?: string;
+  inReplyTo?: string;
+  references?: string[];
   attachments: MimeDraftAttachment[];
 }
 
@@ -142,6 +146,8 @@ export async function composeDraftMime(input: ComposeDraftMimeInput): Promise<Bu
       html: input.htmlBody?.trim() ? input.htmlBody : undefined,
       attachments: input.attachments?.map(nodemailerAttachment),
       messageId: input.messageId,
+      inReplyTo: input.inReplyTo,
+      references: input.references,
       date: input.date,
       keepBcc: true,
       headers: {
@@ -166,6 +172,8 @@ export function parseDraftMime(raw: Buffer | string): ParsedDraftMime {
     body: extractTextBody(source) ?? "",
     htmlBody: extractHtmlBody(source) ?? undefined,
     messageId: extractRfcMessageIdFromSource(source) || undefined,
+    inReplyTo: getMimeHeader(headers, "In-Reply-To") ?? undefined,
+    references: getMimeHeader(headers, "References")?.match(/<[^<>\s]+>/g) ?? undefined,
     attachments: parseMimeAttachmentData(source).map((attachment) => ({
       filename: attachment.name,
       content: attachment.data,

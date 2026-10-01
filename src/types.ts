@@ -270,6 +270,9 @@ export interface Draft {
   mailboxName?: string;
   /** RFC 5322 Message-ID for saved mailbox drafts when available. */
   messageId?: string;
+  /** Reply threading preserved across IMAP draft edits and SMTP submission. */
+  inReplyTo?: string;
+  references?: string[];
   /** Whether Mail reports one or more attachments on this draft. */
   hasAttachments: boolean;
   /** Attachment metadata for IMAP/MIME drafts. */

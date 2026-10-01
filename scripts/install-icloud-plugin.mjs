@@ -14,8 +14,13 @@ const manifest = JSON.parse(readFileSync(join(source, ".codex-plugin/plugin.json
 assert(existsSync(join(source, "server/server.cjs")), "Package the connector before installing");
 const provenance = JSON.parse(readFileSync(join(source, "server/provenance.json"), "utf8"));
 assert.equal(provenance.version, manifest.version, "Bundle and plugin versions must match");
-assert.equal(createHash("sha256").update(readFileSync(join(source, "server/server.cjs"))).digest("hex"),
-  provenance.sha256, "Bundle integrity check failed");
+assert.equal(
+  createHash("sha256")
+    .update(readFileSync(join(source, "server/server.cjs")))
+    .digest("hex"),
+  provenance.sha256,
+  "Bundle integrity check failed"
+);
 if (existsSync(target)) {
   const current = JSON.parse(readFileSync(join(target, ".codex-plugin/plugin.json"), "utf8"));
   assert.equal(current.name, manifest.name, "Refusing to replace another plugin's source");
@@ -31,7 +36,7 @@ const entry = {
   policy: { installation: "AVAILABLE", authentication: "ON_USE" },
   category: "Productivity",
 };
-const index = catalog.plugins.findIndex(plugin => plugin.name === manifest.name);
+const index = catalog.plugins.findIndex((plugin) => plugin.name === manifest.name);
 if (index < 0) catalog.plugins.push(entry);
 else catalog.plugins[index] = { ...catalog.plugins[index], ...entry };
 mkdirSync(dirname(target), { recursive: true });
@@ -41,7 +46,13 @@ if (existsSync(catalogPath) && !existsSync(`${catalogPath}.before-icloud-mail`))
   cpSync(catalogPath, `${catalogPath}.before-icloud-mail`);
 }
 writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
-const result = spawnSync("codex", ["plugin", "add", `${manifest.name}@${catalog.name}`], { stdio: "inherit" });
+const result = spawnSync("codex", ["plugin", "add", `${manifest.name}@${catalog.name}`], {
+  stdio: "inherit",
+});
 if (result.error) throw result.error;
-assert.equal(result.status, 0, "Codex plugin installation failed; standalone MCP registration was preserved");
+assert.equal(
+  result.status,
+  0,
+  "Codex plugin installation failed; personal marketplace entry was preserved"
+);
 console.log(`Personal plugin source: ${target}`);

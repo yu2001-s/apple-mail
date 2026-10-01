@@ -1,25 +1,12 @@
 {
-  "name": "apple-mail-public",
+  "name": "icloud-mail",
   "interface": {
-    "displayName": "Apple Mail"
+    "displayName": "iCloud Mail"
   },
   "plugins": [
     {
-      "name": "apple-mail",
-      "version": "0.3.0",
-      "source": {
-        "source": "local",
-        "path": "./codex"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
       "name": "icloud-mail",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "source": {
         "source": "local",
         "path": "./plugins/icloud-mail"

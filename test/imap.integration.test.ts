@@ -1,14 +1,12 @@
 /**
  * IMAP backend integration tests against a real IMAP server (GreenMail).
  *
- * Unlike test/integration.test.ts (which drives Mail.app via AppleScript and so
- * only runs on macOS), this exercises the IMAP code path end-to-end against a
- * throwaway IMAP server, so it runs on any OS — including a Linux CI runner.
+ * Exercises the direct IMAP transport against a disposable server.
  *
  * Gated by RUN_IMAP_IT so it is skipped in the normal unit suite. CI sets it and
  * provides a GreenMail service; locally:
  *   docker run -d --rm -p 3143:3143 -e GREENMAIL_OPTS='-Dgreenmail.setup.test.imap -Dgreenmail.users=tester:secret@example.com -Dgreenmail.auth.disabled' greenmail/standalone:2.1.0
- *   RUN_IMAP_IT=1 npm run test:imap
+ *   RUN_IMAP_IT=1 pnpm test:imap
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { ImapFlow } from "imapflow";

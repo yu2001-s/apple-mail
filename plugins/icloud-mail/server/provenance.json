@@ -1,7 +1,19 @@
 {
   "connector": "icloud-mail",
-  "version": "1.2.0",
-  "sha256": "30b3175c51065042dfd3afa53e6cec66663d1edaa7a73f06ed7f65fe3a1aa7a3",
+  "version": "1.2.1",
+  "sha256": "faf22d1fc7f7dc0bc8abb48e1d8d12964821bc06d13263d17e3a0b5d01618f95",
   "runtime": "server.cjs",
-  "packaging": "Unmodified standalone bundle; dependencies included; persistent data excluded"
+  "sources": [
+    "src/icloud/server.ts",
+    "src/icloud/signature.ts",
+    "src/services/fileConfig.ts",
+    "src/services/imapClient.ts",
+    "src/services/imapDraftManager.ts",
+    "src/services/mimeDraft.ts",
+    "src/services/replyForward.ts",
+    "src/services/smtpMailer.ts",
+    "src/utils/attachmentLimits.ts",
+    "src/utils/docsUrls.ts",
+    "src/utils/mimeParse.ts"
+  ]
 }

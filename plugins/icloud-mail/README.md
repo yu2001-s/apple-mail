@@ -1,72 +1,60 @@
-# iCloud Mail Codex Plugin
+# iCloud Mail Plugin
 
-This packages the existing customized iCloud connector, version 1.2.0, as an
-independently installable Codex Plugin. The bundled runtime is copied byte for
-byte from the working connector, including its dependencies. Installation does
-not require `npm install`, the upstream checkout, Mail.app, or AppleScript.
+A standalone Codex Plugin for iCloud IMAP/SMTP, threaded replies,
+revision-checked drafts, and saved sender signatures. The repository contains
+its source and bundled dependencies. Mail.app and AppleScript are not required.
 
-## Install on this Mac
+## Install and update
 
 From the repository root:
 
 ```sh
-node scripts/package-icloud-plugin.mjs
 node scripts/install-icloud-plugin.mjs
 ```
 
-The installer copies the source to `~/.codex/plugins/icloud-mail/`, adds it to
-`~/.agents/plugins/marketplace.json` while preserving other entries, and installs
-`icloud-mail@personal`. This personal source is discoverable from other project
-directories. The plugin displays as **iCloud Mail**, separately from the existing
-Apple Mail plugin. The MCP uses `/opt/homebrew/bin/node`, matching the previous registration
-on this Mac; update `.mcp.json` before installing on a Mac with a different Node
-location. Node.js 20 or newer and the existing account configuration are required.
+The installer preserves other personal marketplace entries, copies this plugin
+into `~/.codex/plugins/icloud-mail/`, and installs `icloud-mail@personal`.
+Codex loads its cache copy under `~/.codex/plugins/cache/personal/icloud-mail/`.
+Use the installed path reported by the command to identify the current version.
+Only one installation is needed. Start a new chat after an update.
 
-After installation, verify the installed cache copy, then remove the old
-standalone registration to avoid loading the same connector twice:
+The MCP uses `/opt/homebrew/bin/node` on this Mac. Update `.mcp.json` before
+installing on a Mac with a different Node.js location. Node.js 20+ and the
+existing iCloud account configuration are required.
+
+For read-only live verification, optionally pass the installed plugin path:
 
 ```sh
-node scripts/verify-icloud-plugin.mjs ~/.codex/plugins/cache/personal/icloud-mail/1.2.0
-codex mcp remove icloud-mail
+node scripts/verify-icloud-plugin.mjs
 ```
 
-Use the cache path reported by `codex plugin add` if it differs. The verification
-performs authentication, search, message reads, signature retrieval, and reply
-previews. It does not create drafts, mark mail read, or send messages. Start a
-new chat or reconnect the MCP after changing the registration; an existing chat
-may retain its previously loaded tool catalog.
+The verifier authenticates IMAP/SMTP, searches and reads mail, retrieves the
+signature, and previews a threaded reply. It does not send or create drafts.
 
-## Persistent data and credentials
-
-The runtime intentionally preserves the old storage locations:
+## Persistent configuration
 
 - `~/Library/Application Support/apple-mail-mcp/config.json`: account settings
-  and macOS Keychain references.
+  and macOS Keychain references. Passwords remain in Keychain.
 - `~/.codex/integrations/icloud-mail/preferences.json`: primary address and
   per-sender signatures.
 - `~/.codex/integrations/icloud-mail/drafts.json`: stable draft IDs, revisions,
-  and send states.
+  and send state.
 
-These files and passwords are not included in the plugin. Reinstalling or
-removing the plugin does not erase them. Keep the original integration directory.
+These files are not packaged or erased by an update. `ICLOUD_MAIL_DATA_DIR` can
+select another preferences/draft directory; the default preserves existing
+state. `APPLE_MAIL_MCP_CONFIG_FILE` can select another account configuration.
 
-## Updating the package
+The old integration directory is now data only. All maintained source and
+build tooling live in this repository. To rebuild:
 
-`scripts/package-icloud-plugin.mjs [connector-directory]` imports only the
-prebuilt `server.cjs` and the upstream MIT license, checks the connector's
-version against the manifest, and records the bundle SHA-256 in
-`server/provenance.json`. It deliberately does not rebuild unrelated local source
-changes into the working connector. The original integration retains its source
-and build script. After updating that connector, update the plugin and marketplace
-versions, package again, and run the installer to refresh the personal source
-and installed cache copy. The repo marketplace also exposes the plugin as
-`icloud-mail@apple-mail-public` for repo distribution; install only one copy.
+```sh
+pnpm build:plugin
+node scripts/install-icloud-plugin.mjs
+```
 
-The registry is shared with the old connector; operate only one registration at
-a time after migration. To roll back, remove this plugin and re-register the old
-connector:
+`server/provenance.json` records the bundle hash and source inputs. To remove
+the plugin while preserving mail data:
 
 ```sh
 codex plugin remove icloud-mail@personal
-codex mcp add icloud-mail -- /opt/homebrew/bin/node "$HOME/.codex/integrations/icloud-mail/server.cjs"
 ```
