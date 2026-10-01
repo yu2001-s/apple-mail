@@ -42,9 +42,6 @@ else catalog.plugins[index] = { ...catalog.plugins[index], ...entry };
 mkdirSync(dirname(target), { recursive: true });
 cpSync(source, target, { recursive: true });
 mkdirSync(dirname(catalogPath), { recursive: true });
-if (existsSync(catalogPath) && !existsSync(`${catalogPath}.before-icloud-mail`)) {
-  cpSync(catalogPath, `${catalogPath}.before-icloud-mail`);
-}
 writeFileSync(catalogPath, JSON.stringify(catalog, null, 2) + "\n");
 const result = spawnSync("codex", ["plugin", "add", `${manifest.name}@${catalog.name}`], {
   stdio: "inherit",
