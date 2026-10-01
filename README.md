@@ -39,6 +39,21 @@ after installation so the tools and skill are reloaded.
 On first use, macOS asks for permission to automate Mail.app. Allow the Codex
 host process that launched the Plugin.
 
+### Customized iCloud Mail Plugin
+
+The separate [iCloud Mail Plugin](plugins/icloud-mail/README.md) packages the
+existing direct iCloud connector with threaded replies, saved signatures, and
+revision-checked drafts. It uses the existing account configuration, macOS
+Keychain credentials, and persistent data in `~/.codex/integrations/icloud-mail/`.
+
+```bash
+node scripts/package-icloud-plugin.mjs
+node scripts/install-icloud-plugin.mjs
+```
+
+See its installation guide for read-only verification and migration from the
+standalone MCP registration. The installed runtime includes its dependencies.
+
 ### Local development
 
 ```bash

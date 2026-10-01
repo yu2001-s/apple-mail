@@ -1,0 +1,24 @@
+{
+  "name": "icloud-mail",
+  "version": "1.2.0",
+  "description": "Direct iCloud IMAP/SMTP mail, threaded replies, reviewed drafts, and saved sender signatures.",
+  "author": { "name": "Poieti" },
+  "license": "MIT",
+  "keywords": ["icloud", "email", "imap", "smtp", "drafts", "signatures", "macos"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "iCloud Mail",
+    "shortDescription": "Search iCloud mail and send reviewed replies with your signature.",
+    "longDescription": "Connect directly to iCloud over IMAP and SMTP. Search and read messages, preview threaded replies, manage synchronized drafts with revision checks, and apply saved sender signatures. Reuses the existing macOS Keychain credentials and persistent draft registry.",
+    "developerName": "Poieti",
+    "category": "Productivity",
+    "capabilities": ["MCP Servers", "Read", "Write"],
+    "defaultPrompt": [
+      "查看我的 iCloud 收件匣最近的邮件。",
+      "预览这封邮件的回覆，附上我的默认签名。",
+      "列出我可以使用的寄件地址。"
+    ],
+    "brandColor": "#4F98DA"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "icloud-mail": {
+      "command": "/opt/homebrew/bin/node",
+      "args": ["./server/server.cjs"],
+      "cwd": "."
+    }
+  }
+}
