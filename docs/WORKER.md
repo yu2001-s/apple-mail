@@ -94,7 +94,11 @@ out at the end. The Worker keeps no draft state: drafts are found on iCloud by
 their ID header and the `$IcloudMailSending` keyword marks an unresolved send,
 exactly as between two devices (see [REMOTE.md](REMOTE.md#multiple-devices-and-drafts)).
 
-Each tool call takes a few seconds, mostly connecting to iCloud. On the
+Opening an IMAP mailbox takes about ten sequential round trips, so the Worker
+runs next to iCloud's IMAP servers (`placement.host` in `wrangler.jsonc`)
+rather than next to the caller; Cloudflare probes the host after a deploy and
+the `cf-placement` response header shows the chosen data center. Each tool call
+takes about a second, mostly logging in to iCloud. On the
 Workers Free plan a request may use 10 ms of CPU time; reading large messages
 can exceed it, which fails that call. Workers Paid raises the limit.
 

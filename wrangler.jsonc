@@ -11,6 +11,9 @@
   // Kept in step with package.json by scripts/sync-plugin-version.mjs.
   "define": { "CONNECTOR_VERSION": "\"1.4.1\"" },
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  // Run next to iCloud's IMAP servers: opening a mailbox takes about ten
+  // sequential round trips, which cost seconds from a distant data center.
+  "placement": { "host": "imap.mail.me.com:993" },
   "vars": {
     "APPLE_MAIL_MCP_IMAP_HOST": "imap.mail.me.com",
     "APPLE_MAIL_MCP_IMAP_PORT": "993",
