@@ -88922,20 +88922,22 @@ async function imapMoveMessageById(id, destMailbox, deps = {}) {
     }
   });
 }
-function collectAttachments(node, out = []) {
+function collectAttachments(node, out = [], isRoot = true) {
   if (!node) return out;
+  const singlePartRoot = isRoot && !node.childNodes;
+  const part = node.part || (singlePartRoot ? "1" : void 0);
   const filename = node.dispositionParameters?.filename || node.parameters?.name;
   const disposition = node.disposition?.toLowerCase();
-  const isAttachment = !!node.part && (disposition === "attachment" || !!filename && disposition !== "inline");
+  const isAttachment = !!part && (disposition === "attachment" || !!filename && disposition !== "inline" || singlePartRoot && !/^text\//i.test(node.type || "text/plain"));
   if (isAttachment) {
     out.push({
-      part: node.part,
-      filename: filename || `part-${node.part}`,
+      part,
+      filename: filename || `part-${part}`,
       mimeType: node.type || "application/octet-stream",
       size: node.size ?? 0
     });
   }
-  for (const child of node.childNodes ?? []) collectAttachments(child, out);
+  for (const child of node.childNodes ?? []) collectAttachments(child, out, false);
   return out;
 }
 async function streamToBuffer(content) {

@@ -7,6 +7,9 @@
 - Run the Worker next to iCloud's IMAP servers (`placement.host`).
 - iCloud-backed tool calls measured from Taipei: 3.0-4.4 s before, about
   0.6 s now, most of it the network trip to the Worker.
+- Expose the body of a single-part message as an attachment. Google's DMARC
+  reports, whose whole message is one `.zip`, read as empty with no
+  attachments; `list_attachments` and `fetch_attachment` now return the zip.
 
 ## 1.4.1 — 2026-10-02
 

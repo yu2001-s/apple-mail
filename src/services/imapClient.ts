@@ -1531,22 +1531,38 @@ export interface ImapAttachmentInfo {
   size: number;
 }
 
-/** Walk a BODYSTRUCTURE tree collecting attachment parts (disposition or filename). */
-function collectAttachments(node: ImapBodyStructure, out: AttachmentPart[] = []): AttachmentPart[] {
+/**
+ * Walk a BODYSTRUCTURE tree collecting attachment parts (disposition or filename).
+ *
+ * A single-part message (e.g. Google's DMARC reports, whose entire body is one
+ * application/zip) has a root node with no part number. IMAP addresses that
+ * body as part "1" (imapflow's download maps it to BODY[TEXT]), and since there
+ * is no other body to read, a non-text root is always exposed as an attachment.
+ */
+function collectAttachments(
+  node: ImapBodyStructure,
+  out: AttachmentPart[] = [],
+  isRoot = true
+): AttachmentPart[] {
   if (!node) return out;
+  const singlePartRoot = isRoot && !node.childNodes;
+  const part = node.part || (singlePartRoot ? "1" : undefined);
   const filename = node.dispositionParameters?.filename || node.parameters?.name;
   const disposition = node.disposition?.toLowerCase();
   const isAttachment =
-    !!node.part && (disposition === "attachment" || (!!filename && disposition !== "inline"));
+    !!part &&
+    (disposition === "attachment" ||
+      (!!filename && disposition !== "inline") ||
+      (singlePartRoot && !/^text\//i.test(node.type || "text/plain")));
   if (isAttachment) {
     out.push({
-      part: node.part as string,
-      filename: filename || `part-${node.part}`,
+      part,
+      filename: filename || `part-${part}`,
       mimeType: node.type || "application/octet-stream",
       size: node.size ?? 0,
     });
   }
-  for (const child of node.childNodes ?? []) collectAttachments(child, out);
+  for (const child of node.childNodes ?? []) collectAttachments(child, out, false);
   return out;
 }
 

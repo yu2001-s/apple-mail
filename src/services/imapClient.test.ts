@@ -34,6 +34,7 @@ import {
   __setPoolConnect,
   __resetPool,
   dropAllPools,
+  type ImapBodyStructure,
   type ImapClientLike,
   type ImapConfig,
 } from "@/services/imapClient.js";
@@ -844,6 +845,68 @@ describe("attachments via BODYSTRUCTURE (I1)", () => {
 
   it("rejects a non-IMAP id", async () => {
     expect((await imapListAttachments("12345")).success).toBe(false);
+  });
+
+  // Google DMARC aggregate reports are a single-part message whose whole body
+  // is the zip; the BODYSTRUCTURE root carries no part number.
+  function singlePartClient(bodyStructure: ImapBodyStructure, parts: string[] = []) {
+    return {
+      ...makeClient([], {}),
+      fetchOne: async () => ({ uid: 9, bodyStructure }),
+      download: async (_range: string, part: string) => {
+        parts.push(part);
+        return {
+          meta: {},
+          content: (async function* () {
+            yield Buffer.from("PK-zip-bytes");
+          })(),
+        };
+      },
+    } as ImapClientLike;
+  }
+  const DMARC_ZIP = "google.com!poieti.com!1759622400!1759708799.zip";
+
+  it("exposes a single-part non-text message body as attachment part 1", async () => {
+    const parts: string[] = [];
+    const deps = {
+      config: cfg,
+      connect: async () =>
+        singlePartClient(
+          {
+            type: "application/zip",
+            parameters: { name: DMARC_ZIP },
+            disposition: "attachment",
+            dispositionParameters: { filename: DMARC_ZIP },
+            encoding: "base64",
+            size: 1024,
+          },
+          parts
+        ),
+    };
+    const list = await imapListAttachments(MID, deps);
+    expect(list.attachments).toEqual([
+      { id: `${MID}#1`, name: DMARC_ZIP, mimeType: "application/zip", size: 1024 },
+    ]);
+    const r = await imapFetchAttachment(MID, DMARC_ZIP, deps);
+    expect(r.success).toBe(true);
+    expect(Buffer.from(r.base64 as string, "base64").toString()).toBe("PK-zip-bytes");
+    expect(parts).toEqual(["1"]);
+  });
+
+  it("names an unlabeled single-part binary body part-1", async () => {
+    const r = await imapListAttachments(MID, {
+      config: cfg,
+      connect: async () => singlePartClient({ type: "application/gzip", size: 64 }),
+    });
+    expect(r.attachments?.map((a) => a.name)).toEqual(["part-1"]);
+  });
+
+  it("does not treat a plain single-part text message as an attachment", async () => {
+    const r = await imapListAttachments(MID, {
+      config: cfg,
+      connect: async () => singlePartClient({ type: "text/plain", size: 64 }),
+    });
+    expect(r.attachments).toEqual([]);
   });
 });
 
