@@ -89,18 +89,21 @@ again with the owner password.
 
 ## How it differs from the local plugin
 
-Each request builds a fresh connector with one IMAP connection that is logged
-out at the end. The Worker keeps no draft state: drafts are found on iCloud by
-their ID header and the `$IcloudMailSending` keyword marks an unresolved send,
-exactly as between two devices (see [REMOTE.md](REMOTE.md#multiple-devices-and-drafts)).
+The Worker checks OAuth and hands each MCP request to one Durable Object
+(`MailSession`), created in eastern North America next to iCloud's IMAP
+servers. It keeps a single connector: one IMAP connection reused across tool
+calls, the in-memory draft cache, and the queue that serializes mail
+operations. The connection is logged out after three idle minutes. An open
+socket keeps the object in memory and is billed as Durable Object duration;
+even around the clock that stays within the free daily allowance.
 
-Opening an IMAP mailbox takes about ten sequential round trips, so the Worker
-runs next to iCloud's IMAP servers (`placement.host` in `wrangler.jsonc`)
-rather than next to the caller; Cloudflare probes the host after a deploy and
-the `cf-placement` response header shows the chosen data center. Each tool call
-takes about a second, mostly logging in to iCloud. On the
-Workers Free plan a request may use 10 ms of CPU time; reading large messages
-can exceed it, which fails that call. Workers Paid raises the limit.
+The Worker itself runs next to iCloud too (`placement.host` in
+`wrangler.jsonc`); the `cf-placement` response header shows the data center.
+The first call after an idle period logs in again, which takes about a second;
+later calls only pay the network trip to the Worker. The Worker keeps no draft
+state: drafts are found on iCloud by their ID header and the
+`$IcloudMailSending` keyword marks an unresolved send, exactly as between two
+devices (see [REMOTE.md](REMOTE.md#multiple-devices-and-drafts)).
 
 ## Test locally
 

@@ -9,11 +9,14 @@
   // node:net/node:tls for IMAP and SMTP; strictly public fetches for CIMD documents.
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   // Kept in step with package.json by scripts/sync-plugin-version.mjs.
-  "define": { "CONNECTOR_VERSION": "\"1.4.1\"" },
+  "define": { "CONNECTOR_VERSION": "\"1.5.0\"" },
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   // Run next to iCloud's IMAP servers: opening a mailbox takes about ten
   // sequential round trips, which cost seconds from a distant data center.
   "placement": { "host": "imap.mail.me.com:993" },
+  // Serves MCP and keeps the IMAP connection open between tool calls.
+  "durable_objects": { "bindings": [{ "name": "MAIL_SESSION", "class_name": "MailSession" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MailSession"] }],
   "vars": {
     "APPLE_MAIL_MCP_IMAP_HOST": "imap.mail.me.com",
     "APPLE_MAIL_MCP_IMAP_PORT": "993",

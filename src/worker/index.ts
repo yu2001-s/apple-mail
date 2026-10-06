@@ -3,9 +3,10 @@
  *
  * The Worker is its own OAuth 2.1 authorization server (dynamic registration
  * for Claude, Client ID Metadata Documents for ChatGPT) and serves MCP over
- * stateless Streamable HTTP at /mcp. Each request builds a fresh connector
- * context: the iCloud Drafts mailbox and its send markers hold all durable
- * draft state, so nothing but OAuth data needs Worker storage.
+ * stateless Streamable HTTP at /mcp. After OAuth, requests are handled by one
+ * Durable Object that keeps the IMAP connection open between tool calls. The
+ * iCloud Drafts mailbox and its send markers hold all durable draft state, so
+ * only OAuth data and settings need Worker storage.
  */
 import {
   AuthorizationError,
@@ -13,13 +14,10 @@ import {
   OAuthProvider,
   type OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { connectImap, type ImapClientLike, type ImapConnect } from "../services/imapClient.js";
-import { loadContext, type Preferences } from "../icloud/context.js";
-import { kvSettingsStore } from "../icloud/settings.js";
 import { formActionSources, isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
-import { createMcpServer } from "../icloud/tools.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
+
+export { MailSession } from "./session.js";
 
 const MAIL_SCOPE = "mail";
 const MAX_FAILURES = 10;
@@ -34,9 +32,19 @@ interface WaitUntil {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+interface DurableObjectNamespace {
+  idFromName(name: string): unknown;
+  get(
+    id: unknown,
+    options?: { locationHint?: string }
+  ): { fetch(request: Request): Promise<Response> };
+}
+
 export interface Env {
   OAUTH_KV: KV;
   OAUTH_PROVIDER: OAuthHelpers;
+  /** The MailSession Durable Object that serves MCP. */
+  MAIL_SESSION: DurableObjectNamespace;
   /** Approves each OAuth connection. Secret, at least 16 characters. */
   ICLOUD_MAIL_OWNER_PASSWORD?: string;
   /** preferences.json content: primary address and signatures. Secret. */
@@ -47,43 +55,8 @@ export interface Env {
   [key: string]: unknown;
 }
 
-/** Copy string bindings (vars and secrets) into process.env for the shared modules. */
-function syncProcessEnv(env: Env): NodeJS.ProcessEnv {
-  for (const [key, value] of Object.entries(env)) {
-    if (typeof value === "string") process.env[key] = value;
-  }
-  return process.env;
-}
-
-/**
- * One IMAP connection per request. Worker I/O objects cannot outlive or be
- * shared across requests, so the module-level pool is bypassed; operations
- * within a request reuse the connection and it is logged out at the end.
- */
-function requestImap() {
-  let shared: Promise<ImapClientLike> | undefined;
-  const connect: ImapConnect = async (cfg) => {
-    shared ??= connectImap(cfg);
-    const client = await shared;
-    return new Proxy(client, {
-      get(target, property) {
-        if (property === "logout") return async () => undefined;
-        if (property === "close") return () => undefined;
-        const value = Reflect.get(target, property, target);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-  };
-  const end = async () => {
-    const client = await shared?.catch(() => undefined);
-    await client?.logout().catch(() => undefined);
-    client?.close?.();
-  };
-  return { connect, end };
-}
-
 const mcpHandler = {
-  async fetch(request: Request, env: Env, ctx: WaitUntil): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== "POST") {
       return Response.json(
         { jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null },
@@ -100,27 +73,11 @@ const mcpHandler = {
         { status: 500 }
       );
     }
-    const imap = requestImap();
-    const context = loadContext(syncProcessEnv(env), {
-      // Seeds the KV settings on first use; afterwards settings are edited from chat.
-      preferences: JSON.parse(env.ICLOUD_MAIL_PREFERENCES) as Preferences,
-      settingsStore: kvSettingsStore(env.OAUTH_KV),
-      registryPath: null,
-      connect: imap.connect,
-      fileConfig: false,
+    // One instance for the one mailbox, created near iCloud's IMAP servers.
+    const session = env.MAIL_SESSION.get(env.MAIL_SESSION.idFromName("icloud"), {
+      locationHint: "enam",
     });
-    await context.refresh();
-    const server = createMcpServer(context, { remote: true });
-    const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    try {
-      await server.connect(transport);
-      return await transport.handleRequest(request);
-    } finally {
-      ctx.waitUntil(imap.end().finally(() => server.close()));
-    }
+    return session.fetch(request);
   },
 };
 

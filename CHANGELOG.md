@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.0 — 2026-10-05
+
+- Serve MCP on the Worker from a Durable Object that keeps one IMAP
+  connection open across tool calls, closing it after three idle minutes.
+- Run the Worker next to iCloud's IMAP servers (`placement.host`).
+- iCloud-backed tool calls measured from Taipei: 3.0-4.4 s before, about
+  0.6 s now, most of it the network trip to the Worker.
+
 ## 1.4.1 — 2026-10-02
 
 - Publish optional tool arguments as nullable in JSON Schema. ChatGPT
