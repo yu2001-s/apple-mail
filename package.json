@@ -14,7 +14,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "preinstall": "node -e \"const fs=require('fs');const ua=process.env.npm_config_user_agent||'';if(fs.existsSync('.git')&&!ua.startsWith('pnpm')){console.error('\\nThis repo uses pnpm. npm/yarn resolve dependencies off-lockfile and the committed bundle will mismatch CI.\\n\\n  corepack enable && pnpm install --frozen-lockfile\\n');process.exit(1)}\"",
+    "preinstall": "node -e \"const fs=require('fs');const ua=process.env.npm_config_user_agent||'';if(fs.existsSync('.git')&&!ua.startsWith('pnpm')){console.error('\\nThis repo uses pnpm. npm/yarn resolve dependencies off-lockfile and the committed bundle will not match a lockfile build.\\n\\n  corepack enable && pnpm install --frozen-lockfile\\n');process.exit(1)}\"",
     "build": "tsc --noEmit && node scripts/package-icloud-plugin.mjs",
     "build:plugin": "pnpm build",
     "start": "node plugins/icloud-mail/server/server.cjs",

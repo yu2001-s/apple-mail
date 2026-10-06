@@ -22,9 +22,10 @@ verifier reads mail and authenticates without creating drafts or sending.
 
 For a runtime change, bump `package.json`, run
 `node scripts/sync-plugin-version.mjs`, add a changelog entry, rebuild, and
-commit the new `plugins/icloud-mail/server/` files. CI checks that a clean build
-matches the committed bundle and that it boots without runtime dependencies on
-Node 20. The pre-commit hook rebuilds when connector inputs are staged; commit
-from a checkout without unrelated source edits so they do not enter the bundle.
+commit the new `plugins/icloud-mail/server/` files. A clean build must leave the
+committed bundle unchanged, and the bundle must boot without runtime
+dependencies on Node 20 (`node --test test/plugin-boot.test.mjs`). The
+pre-commit hook rebuilds when connector inputs are staged; commit from a
+checkout without unrelated source edits so they do not enter the bundle.
 
 GreenMail integration tests run with `RUN_IMAP_IT=1 pnpm test:imap`.

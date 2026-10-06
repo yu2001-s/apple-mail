@@ -17,7 +17,7 @@ export default defineConfig({
         "*.config.*",
         ".eslintrc.cjs",
       ],
-      // Coverage thresholds - fail CI if not met
+      // Coverage thresholds - fail the coverage run if not met
       // Note: src/services/*.ts excluded - requires Mail.app integration, not unit testable
       thresholds: {
         "src/utils/**/*.ts": {

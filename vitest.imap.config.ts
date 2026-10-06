@@ -2,8 +2,8 @@ import { defineConfig } from "vitest/config";
 import path from "path";
 
 // IMAP integration suite — runs the IMAP backend against a real IMAP server
-// (GreenMail in CI / Docker). It also runs on a Linux CI runner. Gated by RUN_IMAP_IT so it never
-// runs as part of the unit suite.
+// (GreenMail in Docker). Gated by RUN_IMAP_IT so it never runs as part of the
+// unit suite.
 export default defineConfig({
   test: {
     globals: true,

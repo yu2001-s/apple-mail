@@ -3,8 +3,8 @@
  *
  * Exercises the direct IMAP transport against a disposable server.
  *
- * Gated by RUN_IMAP_IT so it is skipped in the normal unit suite. CI sets it and
- * provides a GreenMail service; locally:
+ * Gated by RUN_IMAP_IT so it is skipped in the normal unit suite. To run it,
+ * start GreenMail:
  *   docker run -d --rm -p 3143:3143 -e GREENMAIL_OPTS='-Dgreenmail.setup.test.imap -Dgreenmail.users=tester:secret@example.com -Dgreenmail.auth.disabled' greenmail/standalone:2.1.0
  *   RUN_IMAP_IT=1 pnpm test:imap
  */
