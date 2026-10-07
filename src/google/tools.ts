@@ -497,7 +497,7 @@ export function registerGoogleTools(server: McpServer, accounts: GoogleAccounts)
   );
   stateTool(
     "gmail_untrash_message",
-    "Restore one message from Trash.",
+    "Restore one message from Trash; received mail returns to the inbox.",
     "messages",
     (email, messageId) => gmail.trash(email, "messages", messageId, true)
   );
@@ -507,8 +507,11 @@ export function registerGoogleTools(server: McpServer, accounts: GoogleAccounts)
     "threads",
     (email, threadId) => gmail.trash(email, "threads", threadId)
   );
-  stateTool("gmail_untrash_thread", "Restore a thread from Trash.", "threads", (email, threadId) =>
-    gmail.trash(email, "threads", threadId, true)
+  stateTool(
+    "gmail_untrash_thread",
+    "Restore a thread from Trash; its received messages return to the inbox.",
+    "threads",
+    (email, threadId) => gmail.trash(email, "threads", threadId, true)
   );
   stateTool(
     "gmail_mark_message_spam",
@@ -520,7 +523,7 @@ export function registerGoogleTools(server: McpServer, accounts: GoogleAccounts)
     "gmail_unmark_message_spam",
     "Mark one message as not spam and return it to the inbox.",
     "messages",
-    (email, messageId) => gmail.modify(email, "messages", messageId, ["INBOX"], ["SPAM"])
+    (email, messageId) => gmail.notSpam(email, "messages", messageId)
   );
   stateTool(
     "gmail_mark_thread_spam",
@@ -530,9 +533,9 @@ export function registerGoogleTools(server: McpServer, accounts: GoogleAccounts)
   );
   stateTool(
     "gmail_unmark_thread_spam",
-    "Mark a thread as not spam and return it to the inbox.",
+    "Mark a thread as not spam and return its received messages to the inbox.",
     "threads",
-    (email, threadId) => gmail.modify(email, "threads", threadId, ["INBOX"], ["SPAM"])
+    (email, threadId) => gmail.notSpam(email, "threads", threadId)
   );
 
   tool(

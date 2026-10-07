@@ -86,7 +86,66 @@ function startMillis(event: { start?: GoogleTime }): number {
   return Date.parse(value) || 0;
 }
 
-export function eventView(account: string, calendarId: string, event: any) {
+/** Minutes `timeZone` is ahead of UTC at `date`. */
+function zoneOffset(date: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
+  const wall = Date.UTC(
+    part("year"),
+    part("month") - 1,
+    part("day"),
+    part("hour"),
+    part("minute"),
+    part("second")
+  );
+  return Math.round((wall - Math.floor(date.getTime() / 1000) * 1000) / 60000);
+}
+
+/** An instant as an ISO date-time with a fixed offset in minutes, e.g. +08:00. */
+export function atOffset(ms: number, offsetMinutes: number): string {
+  const local = new Date(ms + offsetMinutes * 60000).toISOString().slice(0, 19);
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const abs = Math.abs(offsetMinutes);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${local}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+/** A Google date-time shown in `timeZone` (an IANA name); unchanged when that fails. */
+export function inZone(
+  value: string | undefined,
+  timeZone: string | undefined
+): string | undefined {
+  if (!value || !timeZone || !value.includes("T")) return value;
+  const ms = Date.parse(value);
+  if (Number.isNaN(ms)) return value;
+  try {
+    return atOffset(ms, zoneOffset(new Date(ms), timeZone));
+  } catch {
+    return value;
+  }
+}
+
+/** The offset in minutes of an ISO date-time such as ...+08:00 or ...Z. */
+function offsetOf(value: string): number {
+  const match = /(Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  if (!match || match[1] === "Z") return 0;
+  return (match[2] === "-" ? -1 : 1) * (Number(match[3]) * 60 + Number(match[4]));
+}
+
+/**
+ * An event in a compact shape. Times are given in `timeZone` when asked for,
+ * otherwise in the event's own zone, not the calendar's (often UTC).
+ */
+export function eventView(account: string, calendarId: string, event: any, timeZone?: string) {
   const self = event.attendees?.find((attendee: any) => attendee.self);
   const description: string | undefined = event.description;
   return {
@@ -100,8 +159,8 @@ export function eventView(account: string, calendarId: string, event: any) {
       ...(description.length > MAX_DESCRIPTION_CHARS && { descriptionTruncated: true }),
     }),
     location: event.location,
-    start: event.start?.dateTime ?? event.start?.date,
-    end: event.end?.dateTime ?? event.end?.date,
+    start: inZone(event.start?.dateTime, timeZone ?? event.start?.timeZone) ?? event.start?.date,
+    end: inZone(event.end?.dateTime, timeZone ?? event.end?.timeZone) ?? event.end?.date,
     allDay: Boolean(event.start?.date),
     timeZone: event.start?.timeZone,
     htmlLink: event.htmlLink,
@@ -231,7 +290,9 @@ export class Calendar {
         })
       );
       return {
-        events: (data.items ?? []).map((event: any) => eventView(account, args.calendarId!, event)),
+        events: (data.items ?? []).map((event: any) =>
+          eventView(account, args.calendarId!, event, args.timeZone)
+        ),
         nextPageToken: data.nextPageToken ?? null,
         timeZone: data.timeZone,
       };
@@ -268,7 +329,7 @@ export class Calendar {
             }
             if (response.body.nextPageToken) more = true;
             for (const event of response.body.items ?? [])
-              events.push(eventView(account, calendarId, event));
+              events.push(eventView(account, calendarId, event, args.timeZone));
           });
         } catch (error) {
           errors.push({ account, error: error instanceof Error ? error.message : String(error) });
@@ -498,7 +559,9 @@ export class Calendar {
       })
     );
     const minMs = (args.durationMinutes ?? 30) * 60000;
-    const iso = (ms: number) => new Date(ms).toISOString();
+    // Answer in the offset the question was asked in.
+    const offset = offsetOf(timeMin);
+    const iso = (ms: number) => atOffset(ms, offset);
     return {
       timeMin,
       timeMax,

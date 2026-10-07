@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { GoogleAccounts } from "./accounts.js";
 import {
   collectParts,
+  tidyText,
   composeMime,
   Gmail,
   messageView,
@@ -433,6 +434,52 @@ describe("Gmail", () => {
       labelListVisibility: "labelShowIfUnread",
       messageListVisibility: "show",
     });
+  });
+
+  it("returns only received mail to the inbox when unmarking spam or untrashing", async () => {
+    const thread = {
+      id: "t1",
+      messages: [
+        { id: "in1", labelIds: ["CATEGORY_PERSONAL"] },
+        { id: "out1", labelIds: ["SENT"] },
+        { id: "in2", labelIds: ["INBOX", "UNREAD"] },
+      ],
+    };
+    const { gmail, calls } = fake(
+      router((_m, url) => {
+        if (url.endsWith("/threads/t1/modify") || url.endsWith("/threads/t1/untrash")) {
+          return structuredClone(thread);
+        }
+        if (url.endsWith("/messages/batchModify")) return {};
+        if (url.endsWith("/messages/m5/modify"))
+          return { id: "m5", threadId: "t5", labelIds: ["SENT"] };
+      })
+    );
+    const unspammed = await gmail.notSpam(ME, "threads", "t1");
+    expect(calls[0].body).toEqual({ removeLabelIds: ["SPAM"] });
+    expect(calls[1].body).toEqual({ ids: ["in1"], addLabelIds: ["INBOX"] });
+    expect(unspammed.messages).toEqual([
+      { id: "in1", labelIds: ["CATEGORY_PERSONAL", "INBOX"] },
+      { id: "out1", labelIds: ["SENT"] },
+      { id: "in2", labelIds: ["INBOX", "UNREAD"] },
+    ]);
+    await gmail.trash(ME, "threads", "t1", true);
+    expect(calls.at(-1)!.body).toEqual({ ids: ["in1"], addLabelIds: ["INBOX"] });
+    const before = calls.length;
+    await gmail.notSpam(ME, "messages", "m5");
+    expect(calls.length).toBe(before + 1);
+  });
+
+  it("tidies padded snippets and bodies", () => {
+    const padded = messageView(
+      ME,
+      { ...original, snippet: "Your recap \u034f\u200c\u200b\u200d\ufeff \u034f\u200c  done" },
+      "MINIMAL"
+    );
+    expect(padded.snippet).toBe("Your recap done");
+    expect(tidyText(`a\r\n${"-".repeat(400)}\r\n\r\n\r\n\r\nb  \r\n`)).toBe(
+      `a\n${"-".repeat(10)}\n\nb\n`
+    );
   });
 
   it("marks spam by moving labels and trashes threads", async () => {

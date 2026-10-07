@@ -253,7 +253,9 @@ export function messageView(
     return view;
   }
   const { text, html, attachments } = collectParts(message.payload);
-  const plain = text.length ? text.join("\n") : html.length ? htmlToText(html.join("\n")) : "";
+  const plain = tidyText(
+    text.length ? text.join("\n") : html.length ? htmlToText(html.join("\n")) : ""
+  );
   const body = bounded(plain, maxBodyChars);
   view.plaintextBody = body.text;
   let truncated = body.truncated;
@@ -273,12 +275,30 @@ export function messageView(
   return view;
 }
 
+/** Invisible characters newsletters pad previews with. */
+const INVISIBLE =
+  /\u034f|\u17b4|\u17b5|[\u00ad\u061c\u115f\u1160\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u206a-\u206f\u3164\ufeff\uffa0]/g;
+
 function decodeSnippet(snippet: string): string {
-  return snippet.replace(/&(#39|quot|amp|lt|gt);/g, (_, name) =>
-    name === "#39"
-      ? "'"
-      : ({ quot: '"', amp: "&", lt: "<", gt: ">" } as Record<string, string>)[name]
-  );
+  return snippet
+    .replace(/&(#39|quot|amp|lt|gt);/g, (_, name) =>
+      name === "#39"
+        ? "'"
+        : ({ quot: '"', amp: "&", lt: "<", gt: ">" } as Record<string, string>)[name]
+    )
+    .replace(INVISIBLE, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/** A plain-text body without padding: LF line ends, no invisible characters, short rules. */
+export function tidyText(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(INVISIBLE, "")
+    .replace(/([-=_*~#.\u2500\u2014])\1{19,}/g, "$1$1$1$1$1$1$1$1$1$1")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
 }
 
 function attachmentsFromInput(inputs: AttachmentInput[] | undefined): MimeAttachment[] {
@@ -1108,7 +1128,40 @@ export class Gmail {
       "POST",
       `${kind}/${encodeURIComponent(id)}/${restore ? "untrash" : "trash"}`
     );
-    return this.modified(account, kind, result);
+    return this.modified(
+      account,
+      kind,
+      restore ? await this.backToInbox(account, kind, result) : result
+    );
+  }
+
+  /** Mark as not spam: out of Spam, and received mail back in the inbox. */
+  async notSpam(account: string, kind: "messages" | "threads", id: string) {
+    const result = await this.call(account, "POST", `${kind}/${encodeURIComponent(id)}/modify`, {
+      removeLabelIds: ["SPAM"],
+    });
+    return this.modified(account, kind, await this.backToInbox(account, kind, result));
+  }
+
+  /**
+   * Return received messages to the inbox, as Gmail's "Not spam" and "Move to
+   * Inbox" do. Our own sent messages and drafts never belong there.
+   */
+  private async backToInbox(account: string, kind: "messages" | "threads", result: any) {
+    const messages: GmailMessage[] = kind === "threads" ? (result.messages ?? []) : [result];
+    const received = messages.filter(
+      (message) =>
+        !message.labelIds?.some((label) =>
+          ["SENT", "DRAFT", "TRASH", "SPAM", "INBOX"].includes(label)
+        )
+    );
+    if (!received.length) return result;
+    await this.call(account, "POST", "messages/batchModify", {
+      ids: received.map((message) => message.id),
+      addLabelIds: ["INBOX"],
+    });
+    for (const message of received) message.labelIds = [...(message.labelIds ?? []), "INBOX"];
+    return result;
   }
 
   private modified(account: string, kind: "messages" | "threads", result: any) {

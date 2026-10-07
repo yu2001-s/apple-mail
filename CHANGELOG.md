@@ -16,6 +16,10 @@
 - The Worker introduces itself as **Mail & Calendar** (`mail-calendar`, with a
   title, description and website in its server info) on its OAuth metadata,
   approval page and home page. The Worker URL is unchanged.
+- "Not spam" and untrash return only received mail to the inbox, never the
+  user's own sent messages. Event times are shown in the event's own time zone
+  (or the requested one) rather than the calendar's, free time in the offset it
+  was asked in, and snippets and bodies lose invisible padding and long rules.
 - Nicknames for Google accounts (e.g. `work`), set on `/accounts` or with
   `set_account_nickname`, accepted wherever a tool takes `account`.
 - `scripts/setup-worker.mjs` uploads `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { GoogleAccounts } from "./accounts.js";
-import { Calendar, freeWindows, shiftTime, timeField } from "./calendar.js";
+import {
+  atOffset,
+  Calendar,
+  eventView,
+  freeWindows,
+  inZone,
+  shiftTime,
+  timeField,
+} from "./calendar.js";
 
 function fake(route: (method: string, url: string, body?: any) => any) {
   const calls: Array<{ method: string; url: string; body?: any }> = [];
@@ -39,6 +47,26 @@ describe("time helpers", () => {
       "2026-10-09T00:30:00+08:00"
     );
     expect(shiftTime("2026-10-08T09:00:00", { minutes: 30 })).toBe("2026-10-08T09:30:00");
+  });
+
+  it("shows times in the event's zone or a requested one", () => {
+    expect(inZone("2026-10-20T13:00:00Z", "Asia/Taipei")).toBe("2026-10-20T21:00:00+08:00");
+    expect(inZone("2026-03-08T12:00:00Z", "America/New_York")).toBe("2026-03-08T08:00:00-04:00");
+    expect(inZone("2026-10-20T13:00:00Z", "Not/AZone")).toBe("2026-10-20T13:00:00Z");
+    expect(inZone("2026-10-20", "Asia/Taipei")).toBe("2026-10-20");
+    expect(atOffset(Date.UTC(2026, 0, 1, 0, 30), -330)).toBe("2025-12-31T19:00:00-05:30");
+    const event = {
+      id: "e",
+      start: { dateTime: "2026-10-20T13:00:00Z", timeZone: "Asia/Taipei" },
+      end: { dateTime: "2026-10-20T14:00:00Z", timeZone: "Asia/Taipei" },
+    };
+    expect(eventView("a", "primary", event)).toMatchObject({
+      start: "2026-10-20T21:00:00+08:00",
+      end: "2026-10-20T22:00:00+08:00",
+    });
+    expect(eventView("a", "primary", event, "Europe/London").start).toBe(
+      "2026-10-20T14:00:00+01:00"
+    );
   });
 
   it("finds free windows between merged busy times", () => {
@@ -257,12 +285,20 @@ describe("Calendar", () => {
       timeMax: "2026-10-08T05:00:00Z",
       durationMinutes: 60,
     });
+    const local = await calendar.findFreeTime(["a@gmail.com"], {
+      timeMin: "2026-10-08T08:00:00+08:00",
+      timeMax: "2026-10-08T13:00:00+08:00",
+    });
+    expect(local.busy[0]).toEqual({
+      start: "2026-10-08T09:00:00+08:00",
+      end: "2026-10-08T10:00:00+08:00",
+    });
     expect(result.busy).toEqual([
-      { start: "2026-10-08T01:00:00.000Z", end: "2026-10-08T03:00:00.000Z" },
+      { start: "2026-10-08T01:00:00+00:00", end: "2026-10-08T03:00:00+00:00" },
     ]);
     expect(result.free).toEqual([
-      { start: "2026-10-08T00:00:00.000Z", end: "2026-10-08T01:00:00.000Z", minutes: 60 },
-      { start: "2026-10-08T03:00:00.000Z", end: "2026-10-08T05:00:00.000Z", minutes: 120 },
+      { start: "2026-10-08T00:00:00+00:00", end: "2026-10-08T01:00:00+00:00", minutes: 60 },
+      { start: "2026-10-08T03:00:00+00:00", end: "2026-10-08T05:00:00+00:00", minutes: 120 },
     ]);
   });
 });
