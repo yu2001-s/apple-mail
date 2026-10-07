@@ -9,7 +9,9 @@ import { resolveSmtpConfig, sendRawViaSmtp } from "../services/smtpMailer.js";
 import { ImapDraftManager } from "../services/imapDraftManager.js";
 import type { SendingIdentity } from "../types.js";
 import {
+  displayNameFor,
   FileSettingsStore,
+  formatSender,
   sameAddress,
   seedSettings,
   type Settings,
@@ -87,8 +89,8 @@ export function loadContext(
       ? {
           identityId: email,
           email,
-          sender: email,
-          fullName: "",
+          sender: formatSender(settings, email),
+          fullName: displayNameFor(settings, email) ?? "",
           accountId: account!,
           accountName: account!,
           enabled: true,

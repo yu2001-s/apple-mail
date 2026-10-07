@@ -20,6 +20,9 @@
   user's own sent messages. Event times are shown in the event's own time zone
   (or the requested one) rather than the calendar's, free time in the offset it
   was asked in, and snippets and bodies lose invisible padding and long rules.
+- iCloud display names: `set_display_name` sets the name recipients see (a
+  default for every sending address, or one address's own), shown in
+  `list_sending_addresses`.
 - Nicknames for Google accounts (e.g. `work`), set on `/accounts` or with
   `set_account_nickname`, accepted wherever a tool takes `account`.
 - `scripts/setup-worker.mjs` uploads `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,

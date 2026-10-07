@@ -1,7 +1,7 @@
 {
   "connector": "icloud-mail",
   "version": "1.6.0",
-  "sha256": "5f187d35d020e378ee68c5c1a1b21c823ef94bcf17c2147cfc9f26bce18fee7e",
+  "sha256": "01e1ed27ad5abb77e5950cfddb71db30325e8151529fa48b003bfd9710debf14",
   "runtime": "server.cjs",
   "sources": [
     "src/icloud/context.ts",

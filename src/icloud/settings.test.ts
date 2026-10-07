@@ -4,9 +4,12 @@ import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   addressesIn,
+  applyDisplayName,
   applySettingsUpdate,
   applySignature,
+  displayNameFor,
   FileSettingsStore,
+  formatSender,
   kvSettingsStore,
   mergeDiscovered,
   parseSettings,
@@ -129,5 +132,41 @@ describe("connector settings", () => {
     expect(await kv.load()).toBeNull();
     await kv.save(base());
     expect(await kv.load()).toEqual(base());
+  });
+});
+
+describe("display names", () => {
+  const base = {
+    version: 1 as const,
+    primaryAddress: "peter@poieti.com",
+    addresses: ["peter@poieti.com", "hello@draftfold.com"],
+    signatures: {},
+    excluded: [],
+  };
+
+  it("uses a default name for every address, with per-address overrides", () => {
+    let settings = applyDisplayName(base, "  Shao Yu   Huang ");
+    expect(formatSender(settings, "peter@poieti.com")).toBe('"Shao Yu Huang" <peter@poieti.com>');
+    settings = applyDisplayName(settings, "Draftfold", "HELLO@draftfold.com");
+    expect(formatSender(settings, "hello@draftfold.com")).toBe('"Draftfold" <hello@draftfold.com>');
+    expect(displayNameFor(settings, "peter@poieti.com")).toBe("Shao Yu Huang");
+    settings = applyDisplayName(settings, "", "hello@draftfold.com");
+    expect(displayNameFor(settings, "hello@draftfold.com")).toBe("Shao Yu Huang");
+    settings = applyDisplayName(settings, "");
+    expect(formatSender(settings, "peter@poieti.com")).toBe("peter@poieti.com");
+  });
+
+  it("rejects unsafe names and unknown addresses, and survives storage", () => {
+    expect(() => applyDisplayName(base, 'Evil" <x@y.z>')).toThrow(/display name/);
+    expect(() => applyDisplayName(base, "Name", "nobody@x.com")).toThrow(/not a sending address/);
+    const stored = parseSettings(
+      JSON.parse(
+        JSON.stringify(
+          applyDisplayName(applyDisplayName(base, "Shao"), "Hi", "hello@draftfold.com")
+        )
+      )
+    );
+    expect(stored.displayName).toBe("Shao");
+    expect(stored.displayNames).toEqual({ "hello@draftfold.com": "Hi" });
   });
 });

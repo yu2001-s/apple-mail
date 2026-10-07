@@ -20,6 +20,10 @@ export interface Settings {
   excluded: string[];
   /** When Sent and the inbox were last scanned for addresses. */
   discoveredAt?: string;
+  /** Name shown with every sending address, e.g. "Shao Yu Huang". */
+  displayName?: string;
+  /** Per-address names that replace displayName. */
+  displayNames?: Record<string, string>;
 }
 
 export interface SettingsStore {
@@ -106,7 +110,50 @@ export function parseSettings(value: unknown): Settings {
     ),
     excluded: Array.isArray(s.excluded) ? unique(s.excluded.map(String)) : [],
     discoveredAt: typeof s.discoveredAt === "string" ? s.discoveredAt : undefined,
+    ...(typeof s.displayName === "string" && s.displayName && { displayName: s.displayName }),
+    ...(s.displayNames && {
+      displayNames: Object.fromEntries(
+        Object.entries(s.displayNames).filter(([, name]) => typeof name === "string" && name)
+      ),
+    }),
   };
+}
+
+/** The name shown with `address`: its own, else the default, else none. */
+export function displayNameFor(settings: Settings, address: string): string | undefined {
+  const own = Object.entries(settings.displayNames ?? {}).find(([key]) =>
+    sameAddress(key, address)
+  )?.[1];
+  return own || settings.displayName || undefined;
+}
+
+/** `"Name" <address>`, or the bare address when it has no name. */
+export function formatSender(settings: Settings, address: string): string {
+  const name = displayNameFor(settings, address);
+  return name ? `"${name.replace(/["\\]/g, "")}" <${address}>` : address;
+}
+
+/**
+ * Set or, with an empty name, clear a display name: the default for every
+ * address when `from` is omitted, otherwise one address's own name.
+ */
+export function applyDisplayName(settings: Settings, name: string, from?: string): Settings {
+  const clean = name.replace(/\s+/g, " ").trim();
+  if (clean.length > 100 || /[<>"\\]/.test(clean)) {
+    throw new Error('A display name is up to 100 characters without < > " or \\.');
+  }
+  if (!from) {
+    const next: Settings = { ...settings, displayName: clean };
+    if (!clean) delete next.displayName;
+    return next;
+  }
+  const address = settings.addresses.find((item) => sameAddress(item, from));
+  if (!address) throw new Error(`"${from}" is not a sending address.`);
+  const displayNames = Object.fromEntries(
+    Object.entries(settings.displayNames ?? {}).filter(([key]) => !sameAddress(key, address))
+  );
+  if (clean) displayNames[address] = clean;
+  return { ...settings, displayNames };
 }
 
 /** Apply an explicit user change. Throws on anything that would leave no valid sender. */
