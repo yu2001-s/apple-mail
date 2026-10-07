@@ -101,7 +101,7 @@ test("installed bundle boots without node_modules and exposes the direct iCloud 
       JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n"
     );
     const { tools } = await request(2, "tools/list");
-    assert.equal(tools.length, 20);
+    assert.equal(tools.length, 21);
     // Strict host validators may not resolve $ref; every field is inlined.
     assert(!JSON.stringify(tools).includes('"$ref"'), "tool schemas must not contain $ref");
     // Hosts validate JSON Schema before the server can normalize null to absent.

@@ -194,7 +194,7 @@ test("remote mode requires OAuth and serves the tools to an approved client", as
     const listed = await (
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
-    assert.equal(listed.result.tools.length, 20);
+    assert.equal(listed.result.tools.length, 21);
     const createDraft = listed.result.tools.find((tool) => tool.name === "create_draft");
     // Remote callers cannot name files on the server.
     const list = branches(createDraft.inputSchema.properties.attachments).find(
