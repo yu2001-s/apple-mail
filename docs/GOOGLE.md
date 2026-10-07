@@ -28,7 +28,10 @@ with any Google account:
    [Google Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com)
    and choose **Enable** on each.
 3. **Google Auth Platform → Branding**: give the app a name and your support
-   email.
+   email. Google only lets an app be published once it has a home page and a
+   privacy policy on an authorized domain. The Worker serves both: use
+   `https://icloud-mail.<your-subdomain>.workers.dev/` and `…/privacy`, and add
+   `<your-subdomain>.workers.dev` under *Authorized domains*.
 4. **Audience**: choose **External**, then **Publish app** so the status reads
    **In production**. This step matters: while an app is in *Testing*, Google
    expires its refresh tokens after 7 days and every account would need

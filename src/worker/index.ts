@@ -18,6 +18,7 @@ import {
 import { isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
 import { handleAccounts } from "./accounts.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
+import { homePage, privacyPage } from "./pages.js";
 import {
   consentFormAction,
   failures,
@@ -164,6 +165,8 @@ const appHandler = {
       return handleAccounts(request, env);
     }
     if (pathname === "/healthz") return Response.json({ ok: true });
+    if (pathname === "/") return homePage();
+    if (pathname === "/privacy") return privacyPage();
     return new Response("Not found", { status: 404 });
   },
 };
