@@ -198,7 +198,11 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
 
     const initialized = await rpc(tokens.access_token, initialize);
     assert.equal(initialized.status, 200, await initialized.clone().text());
-    assert.equal((await initialized.json()).result.serverInfo.name, "icloud-mail");
+    const serverInfo = (await initialized.json()).result.serverInfo;
+    assert.equal(serverInfo.name, "mail-calendar");
+    assert.equal(serverInfo.title, "Mail & Calendar");
+    assert.match(serverInfo.description, /Gmail/);
+    assert.equal(serverInfo.websiteUrl, `${base}/`);
     const listed = await (
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();

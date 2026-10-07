@@ -124,7 +124,7 @@ export class MailSession {
     await icloud?.refresh();
     const server = await createConnectorServer(
       { icloud, google: this.googleAccounts(origin) },
-      { remote: true }
+      { remote: true, websiteUrl: `${origin}/` }
     );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

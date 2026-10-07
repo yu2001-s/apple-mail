@@ -18,6 +18,7 @@ import {
 import { isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
 import { handleAccounts } from "./accounts.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
+import { CONNECTOR_TITLE } from "../mcp/identity.js";
 import { homePage, privacyPage } from "./pages.js";
 import {
   consentFormAction,
@@ -188,7 +189,7 @@ function providerFor(origin: string, extraRedirects: string[]): OAuthProvider<En
       resourceMetadata: {
         resource: `${origin}/mcp`,
         authorization_servers: [origin],
-        resource_name: "iCloud Mail",
+        resource_name: CONNECTOR_TITLE,
       },
       clientIdMetadataDocumentEnabled: true,
       accessTokenTTL: 60 * 60,

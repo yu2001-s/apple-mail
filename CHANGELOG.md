@@ -13,6 +13,9 @@
 - 8 `calendar_*` tools: calendars, events merged across accounts, create,
   update, delete, RSVP, and free time across every account.
 - `list_accounts` lists the iCloud account and each linked Google account.
+- The Worker introduces itself as **Mail & Calendar** (`mail-calendar`, with a
+  title, description and website in its server info) on its OAuth metadata,
+  approval page and home page. The Worker URL is unchanged.
 - Nicknames for Google accounts (e.g. `work`), set on `/accounts` or with
   `set_account_nickname`, accepted wherever a tool takes `account`.
 - `scripts/setup-worker.mjs` uploads `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,

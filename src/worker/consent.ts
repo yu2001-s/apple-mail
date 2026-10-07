@@ -1,4 +1,5 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
+import { CONNECTOR_TITLE } from "../mcp/identity.js";
 import { escapeHtml } from "../utils/escapeHtml.js";
 
 export { escapeHtml };
@@ -28,9 +29,9 @@ export function consentPage(details: ConsentDescription, handle: string, error?:
     ? "<p><strong>This sends access to an app on a computer.</strong> Continue only if you just started connecting from it.</p>"
     : "";
   return page(
-    "Authorize iCloud Mail",
-    `<h1>Authorize iCloud Mail</h1>
-<p><strong>${name}</strong> is requesting access to read, draft and send mail from this account. ${origin}</p>
+    `Authorize ${CONNECTOR_TITLE}`,
+    `<h1>Authorize ${escapeHtml(CONNECTOR_TITLE)}</h1>
+<p><strong>${name}</strong> is requesting access to read, draft and send mail and to manage calendars for every connected account. ${origin}</p>
 <p>Access will be sent to <strong>${escapeHtml(details.redirectHost)}</strong>.</p>
 ${loopback}
 ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
@@ -45,8 +46,8 @@ ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
 /** Ask again after a wrong password; the consent handle stays valid until used. */
 export function retryPage(handle: string, error: string): string {
   return page(
-    "Authorize iCloud Mail",
-    `<h1>Authorize iCloud Mail</h1>
+    `Authorize ${CONNECTOR_TITLE}`,
+    `<h1>Authorize ${escapeHtml(CONNECTOR_TITLE)}</h1>
 <p class="error">${escapeHtml(error)}</p>
 <form method="post">
 <input type="hidden" name="handle" value="${escapeHtml(handle)}">
@@ -57,7 +58,7 @@ export function retryPage(handle: string, error: string): string {
 }
 
 export function messagePage(message: string, status = 400): Response {
-  return new Response(page("iCloud Mail", `<p>${escapeHtml(message)}</p>`), {
+  return new Response(page(CONNECTOR_TITLE, `<p>${escapeHtml(message)}</p>`), {
     status,
     headers: {
       "Content-Type": "text/html; charset=utf-8",

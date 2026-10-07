@@ -7,6 +7,7 @@ import type { ConnectorContext } from "../icloud/context.js";
 import { icloudInstructions, registerIcloudTools, type ToolOptions } from "../icloud/tools.js";
 import type { GoogleAccounts } from "../google/accounts.js";
 import { googleInstructions, registerGoogleTools } from "../google/tools.js";
+import { CONNECTOR_DESCRIPTION, CONNECTOR_NAME, CONNECTOR_TITLE } from "./identity.js";
 import { registerTool, toolResult } from "./tooling.js";
 
 declare const CONNECTOR_VERSION: string;
@@ -18,7 +19,7 @@ export interface ConnectorServices {
 
 export async function createConnectorServer(
   services: ConnectorServices,
-  options: ToolOptions = {}
+  options: ToolOptions & { websiteUrl?: string } = {}
 ): Promise<McpServer> {
   const { icloud, google } = services;
   const parts: string[] = [];
@@ -35,7 +36,13 @@ export async function createConnectorServer(
     "Use list_accounts to see every connected account. When the user asks about mail or calendar without naming an account, cover all of them."
   );
   const server = new McpServer(
-    { name: "icloud-mail", version: CONNECTOR_VERSION },
+    {
+      name: CONNECTOR_NAME,
+      title: CONNECTOR_TITLE,
+      description: CONNECTOR_DESCRIPTION,
+      version: CONNECTOR_VERSION,
+      ...(options.websiteUrl && { websiteUrl: options.websiteUrl }),
+    },
     { instructions: parts.join("\n\n") }
   );
   if (icloud) registerIcloudTools(server, icloud, options);

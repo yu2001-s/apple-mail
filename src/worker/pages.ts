@@ -2,6 +2,8 @@
  * The public home and privacy pages Google requires before an OAuth app with
  * Gmail and Calendar access can be published.
  */
+import { CONNECTOR_DESCRIPTION, CONNECTOR_TITLE } from "../mcp/identity.js";
+import { escapeHtml } from "../utils/escapeHtml.js";
 import { page } from "./consent.js";
 
 function html(title: string, body: string): Response {
@@ -17,9 +19,10 @@ function html(title: string, body: string): Response {
 
 export function homePage(): Response {
   return html(
-    "Mail connector",
-    `<h1>Mail connector</h1>
-<p>A private connector that lets its owner's AI assistants (Claude and ChatGPT) read, draft and send the owner's iCloud mail and Gmail, and manage the owner's Google Calendar events.</p>
+    CONNECTOR_TITLE,
+    `<h1>${escapeHtml(CONNECTOR_TITLE)}</h1>
+<p>${escapeHtml(CONNECTOR_DESCRIPTION)}</p>
+<p>A private connector for its owner's AI assistants (Claude and ChatGPT).</p>
 <p>It serves only the person who deployed it: every connection and every linked account is approved with the owner's password. It is not offered to the public.</p>
 <p><a href="/privacy">Privacy policy</a></p>`
   );
