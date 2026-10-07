@@ -1,8 +1,8 @@
 {
   "name": "icloud-mail-mcp",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "packageManager": "pnpm@11.9.0",
-  "description": "Direct iCloud IMAP/SMTP MCP connector for Claude and Codex, local or remote, with threaded replies and saved signatures",
+  "description": "Direct iCloud IMAP/SMTP MCP connector for Claude and Codex, local or remote, with threaded replies and saved signatures; on Cloudflare, also Gmail and Google Calendar for many accounts",
   "type": "module",
   "main": "plugins/icloud-mail/server/server.cjs",
   "bin": {
@@ -41,6 +41,8 @@
     "email",
     "imap",
     "smtp",
+    "gmail",
+    "google-calendar",
     "mcp",
     "claude",
     "codex",

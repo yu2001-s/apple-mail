@@ -1,7 +1,7 @@
 {
   "connector": "icloud-mail",
-  "version": "1.5.0",
-  "sha256": "a463813caa40f93c694a5a25e90fcffe179d4d8d26de30cc0f79883c7e68d4f4",
+  "version": "1.6.0",
+  "sha256": "5f187d35d020e378ee68c5c1a1b21c823ef94bcf17c2147cfc9f26bce18fee7e",
   "runtime": "server.cjs",
   "sources": [
     "src/icloud/context.ts",
@@ -12,6 +12,7 @@
     "src/icloud/settings.ts",
     "src/icloud/signature.ts",
     "src/icloud/tools.ts",
+    "src/mcp/tooling.ts",
     "src/services/fileConfig.ts",
     "src/services/imapClient.ts",
     "src/services/imapDraftManager.ts",

@@ -1,12 +1,13 @@
 /**
- * Cloudflare Worker deployment of the iCloud Mail connector.
+ * Cloudflare Worker deployment of the connector: iCloud mail, plus Gmail and
+ * Google Calendar for every Google account linked at /accounts.
  *
  * The Worker is its own OAuth 2.1 authorization server (dynamic registration
  * for Claude, Client ID Metadata Documents for ChatGPT) and serves MCP over
  * stateless Streamable HTTP at /mcp. After OAuth, requests are handled by one
  * Durable Object that keeps the IMAP connection open between tool calls. The
  * iCloud Drafts mailbox and its send markers hold all durable draft state, so
- * only OAuth data and settings need Worker storage.
+ * only OAuth data, settings and sealed Google tokens need Worker storage.
  */
 import {
   AuthorizationError,
@@ -14,19 +15,22 @@ import {
   OAuthProvider,
   type OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
-import { formActionSources, isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
+import { isAllowedRedirect, parseRedirectList } from "../icloud/redirects.js";
+import { handleAccounts } from "./accounts.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
+import {
+  consentFormAction,
+  failures,
+  MAX_FAILURES,
+  passwordMatches,
+  recordFailure,
+  withPageHeaders,
+  type KV,
+} from "./owner.js";
 
 export { MailSession } from "./session.js";
 
 const MAIL_SCOPE = "mail";
-const MAX_FAILURES = 10;
-const FAILURE_WINDOW_S = 60 * 60;
-
-interface KV {
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-}
 
 interface WaitUntil {
   waitUntil(promise: Promise<unknown>): void;
@@ -52,6 +56,11 @@ export interface Env {
   /** Optional canonical origin when the Worker answers on several hostnames. */
   ICLOUD_MAIL_PUBLIC_URL?: string;
   ICLOUD_MAIL_OAUTH_REDIRECT_URIS?: string;
+  /** Google OAuth client for linking Gmail and Calendar accounts. See docs/GOOGLE.md. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** Encrypts stored Google refresh tokens. Secret, at least 32 characters. */
+  CONNECTOR_SECRET_KEY?: string;
   [key: string]: unknown;
 }
 
@@ -63,59 +72,26 @@ const mcpHandler = {
         { status: 405, headers: { Allow: "POST" } }
       );
     }
-    if (!env.ICLOUD_MAIL_PREFERENCES) {
+    if (!env.ICLOUD_MAIL_PREFERENCES && !env.GOOGLE_CLIENT_ID) {
       return Response.json(
         {
           jsonrpc: "2.0",
-          error: { code: -32603, message: "ICLOUD_MAIL_PREFERENCES is not configured." },
+          error: {
+            code: -32603,
+            message: "Configure iCloud (ICLOUD_MAIL_PREFERENCES) or Google (GOOGLE_CLIENT_ID).",
+          },
           id: null,
         },
         { status: 500 }
       );
     }
-    // One instance for the one mailbox, created near iCloud's IMAP servers.
+    // One instance for all accounts, created near iCloud's IMAP servers.
     const session = env.MAIL_SESSION.get(env.MAIL_SESSION.idFromName("icloud"), {
       locationHint: "enam",
     });
     return session.fetch(request);
   },
 };
-
-function failureKey(): string {
-  return `owner-failures:${Math.floor(Date.now() / 1000 / FAILURE_WINDOW_S)}`;
-}
-
-async function failures(env: Env): Promise<number> {
-  return Number((await env.OAUTH_KV.get(failureKey())) ?? 0);
-}
-
-async function recordFailure(env: Env): Promise<void> {
-  const count = (await failures(env)) + 1;
-  await env.OAUTH_KV.put(failureKey(), String(count), { expirationTtl: FAILURE_WINDOW_S * 2 });
-}
-
-async function passwordMatches(supplied: string, expected: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const [a, b] = await Promise.all(
-    [supplied, expected].map((value) => crypto.subtle.digest("SHA-256", encoder.encode(value)))
-  );
-  const left = new Uint8Array(a);
-  const right = new Uint8Array(b);
-  let diff = 0;
-  for (let i = 0; i < left.length; i += 1) diff |= left[i] ^ right[i];
-  return diff === 0;
-}
-
-function withPageHeaders(headers: Headers, extra: string[]): Headers {
-  headers.set("Content-Type", "text/html; charset=utf-8");
-  headers.set("Cache-Control", "no-store");
-  headers.set("Referrer-Policy", "no-referrer");
-  headers.set(
-    "Content-Security-Policy",
-    `default-src 'none'; style-src 'unsafe-inline'; form-action ${formActionSources(extra)}; frame-ancestors 'none'`
-  );
-  return headers;
-}
 
 async function authorize(request: Request, env: Env): Promise<Response> {
   const oauth = env.OAUTH_PROVIDER;
@@ -133,7 +109,7 @@ async function authorize(request: Request, env: Env): Promise<Response> {
       const details = await oauth.describeConsent(authRequest);
       const consent = await oauth.beginConsent(authRequest);
       return new Response(consentPage(details, consent.handle), {
-        headers: withPageHeaders(consent.headers, extra),
+        headers: withPageHeaders(consent.headers, consentFormAction(extra)),
       });
     }
     if (request.method !== "POST") return messagePage("Method not allowed.", 405);
@@ -143,14 +119,14 @@ async function authorize(request: Request, env: Env): Promise<Response> {
       const denied = await oauth.denyConsent(request, handle);
       return new Response(null, { status: 302, headers: denied.headers });
     }
-    if ((await failures(env)) >= MAX_FAILURES) {
+    if ((await failures(env.OAUTH_KV)) >= MAX_FAILURES) {
       return messagePage("Too many failed attempts. Try again in an hour.", 429);
     }
     if (!(await passwordMatches(String(form.get("password") ?? ""), ownerPassword))) {
-      await recordFailure(env);
+      await recordFailure(env.OAUTH_KV);
       return new Response(retryPage(handle, "Incorrect owner password."), {
         status: 401,
-        headers: withPageHeaders(new Headers(), extra),
+        headers: withPageHeaders(new Headers(), consentFormAction(extra)),
       });
     }
     const approved = await oauth.approveConsent(request, handle, { scope: [MAIL_SCOPE] });
@@ -184,6 +160,9 @@ const appHandler = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const { pathname } = new URL(request.url);
     if (pathname === "/authorize") return authorize(request, env);
+    if (pathname === "/accounts" || pathname.startsWith("/accounts/")) {
+      return handleAccounts(request, env);
+    }
     if (pathname === "/healthz") return Response.json({ ok: true });
     return new Response("Not found", { status: 404 });
   },

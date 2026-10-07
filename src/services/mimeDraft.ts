@@ -57,7 +57,7 @@ function splitHeaderBody(raw: string): { headers: string; body: string } {
   return { headers: raw.slice(0, index), body: raw.slice(index + separator.length) };
 }
 
-function decodeHeaderWord(value: string): string {
+export function decodeHeaderWord(value: string): string {
   // RFC 2047 says linear whitespace between adjacent encoded-words is only
   // folding whitespace and must not appear in the decoded value. Nodemailer
   // splits long subjects at arbitrary byte boundaries, so preserving that
@@ -85,7 +85,7 @@ function decodeHeaderWord(value: string): string {
   );
 }
 
-function splitAddresses(value: string | null): string[] {
+export function splitAddresses(value: string | null): string[] {
   if (!value?.trim()) return [];
   const parts: string[] = [];
   let current = "";

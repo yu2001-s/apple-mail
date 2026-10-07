@@ -4,12 +4,18 @@ A direct iCloud IMAP/SMTP connector for Claude and Codex. It searches and reads
 mail, creates synchronized drafts, resolves threaded replies, and applies saved
 sender signatures. It does not launch Mail.app or use AppleScript.
 
+Deployed as a Cloudflare Worker, the same connector also serves any number of
+Gmail and Google Calendar accounts: Gmail tools that match Google's own Gmail
+connector, calendar tools that work across every account, and one place to
+link them. See [docs/GOOGLE.md](docs/GOOGLE.md).
+
 The bundled runtime and minimal Skill live in `plugins/icloud-mail/`. The same
 bundle runs several ways:
 
 | Where | How | Guide |
 | --- | --- | --- |
 | Claude and ChatGPT on every device | Cloudflare Worker, added once per account | [docs/WORKER.md](docs/WORKER.md) |
+| Plus Gmail and Google Calendar | Same Worker, accounts linked at `/accounts` | [docs/GOOGLE.md](docs/GOOGLE.md) |
 | Same, on your own machine | Remote MCP server with OAuth | [docs/REMOTE.md](docs/REMOTE.md) |
 | Codex, locally | Personal Codex Plugin | below |
 | Claude Code, locally | Plugin directory | below |
@@ -75,7 +81,9 @@ pnpm test
 
 `src/icloud/server.ts` is the MCP entrypoint: it serves the tools from
 `tools.ts` over stdio, or over HTTP (`http.ts`, `oauth.ts`) with `--http`.
-`src/worker/index.ts` serves the same tools from a Cloudflare Worker. The
+`src/worker/index.ts` serves the same tools from a Cloudflare Worker, together
+with the Gmail and Calendar tools in `src/google/` (`src/mcp/server.ts`
+combines them) and the account linking pages in `src/worker/accounts.ts`. The
 shared IMAP, SMTP, MIME, and draft modules remain under `src/`.
 `pnpm build:plugin` builds the standalone bundle directly from these sources and
 records its SHA-256 and source inputs. It does not read an older installed

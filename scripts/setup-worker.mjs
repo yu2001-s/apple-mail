@@ -8,6 +8,11 @@
 // The first run generates an owner password and prints it once; later runs
 // keep it. Set ICLOUD_MAIL_OWNER_PASSWORD to choose or rotate it. Save it: it
 // approves each new connection.
+//
+// For Gmail and Google Calendar, set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+// (see docs/GOOGLE.md). The key that encrypts stored Google tokens,
+// CONNECTOR_SECRET_KEY, is generated once and never rotated by this script:
+// a new key makes every linked Google account unreadable.
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -83,26 +88,46 @@ if (chosen !== undefined && chosen.length < 16) {
   throw new Error("ICLOUD_MAIL_OWNER_PASSWORD must be at least 16 characters.");
 }
 
-/** Names of the secrets the deployed Worker already has. */
+/**
+ * Names of the secrets the deployed Worker already has. Fails rather than
+ * guessing: a wrongly empty list would replace the owner password and the
+ * token key, and a new token key makes every linked Google account unreadable.
+ */
 function existingSecrets() {
   const result = spawnSync(wrangler, ["secret", "list", "--format", "json"], {
     cwd: root,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
   try {
     return new Set(JSON.parse(result.stdout).map((secret) => secret.name));
   } catch {
-    return new Set();
+    throw new Error(
+      `Could not list the Worker's secrets; deploy it first or retry.\n${result.stderr ?? ""}`
+    );
   }
 }
 
+const googleId = process.env.GOOGLE_CLIENT_ID;
+const googleSecret = process.env.GOOGLE_CLIENT_SECRET;
+if (Boolean(googleId) !== Boolean(googleSecret)) {
+  throw new Error("Set both GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, or neither.");
+}
+if (googleId) {
+  secrets.GOOGLE_CLIENT_ID = googleId;
+  secrets.GOOGLE_CLIENT_SECRET = googleSecret;
+}
+
 if (!process.argv.includes("--secrets")) run(["deploy"]);
+const existing = existingSecrets();
 let generated = false;
 if (chosen) secrets.ICLOUD_MAIL_OWNER_PASSWORD = chosen;
-else if (!existingSecrets().has("ICLOUD_MAIL_OWNER_PASSWORD")) {
+else if (!existing.has("ICLOUD_MAIL_OWNER_PASSWORD")) {
   secrets.ICLOUD_MAIL_OWNER_PASSWORD = randomBytes(18).toString("base64url");
   generated = true;
+}
+if (!existing.has("CONNECTOR_SECRET_KEY")) {
+  secrets.CONNECTOR_SECRET_KEY = randomBytes(32).toString("base64url");
 }
 run(["secret", "bulk"], JSON.stringify(secrets));
 console.log(`\nUploaded ${Object.keys(secrets).length} secrets.`);
@@ -114,3 +139,6 @@ if (generated) {
 console.log(
   "Add <worker URL>/mcp as a custom connector in Claude and ChatGPT; see docs/WORKER.md."
 );
+if (googleId || existing.has("GOOGLE_CLIENT_ID")) {
+  console.log("Link Google accounts at <worker URL>/accounts; see docs/GOOGLE.md.");
+}

@@ -9,7 +9,7 @@
   // node:net/node:tls for IMAP and SMTP; strictly public fetches for CIMD documents.
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   // Kept in step with package.json by scripts/sync-plugin-version.mjs.
-  "define": { "CONNECTOR_VERSION": "\"1.5.0\"" },
+  "define": { "CONNECTOR_VERSION": "\"1.6.0\"" },
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   // Run next to iCloud's IMAP servers: opening a mailbox takes about ten
   // sequential round trips, which cost seconds from a distant data center.

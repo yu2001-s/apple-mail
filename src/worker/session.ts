@@ -12,7 +12,9 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { connectImap, type ImapClientLike, type ImapConnect } from "../services/imapClient.js";
 import { loadContext, type ConnectorContext, type Preferences } from "../icloud/context.js";
 import { kvSettingsStore } from "../icloud/settings.js";
-import { createMcpServer } from "../icloud/tools.js";
+import type { GoogleAccounts } from "../google/accounts.js";
+import { createConnectorServer } from "../mcp/server.js";
+import { googleAccountsFor } from "./accounts.js";
 import type { Env } from "./index.js";
 
 /** Close the IMAP connection after this long without a tool call. */
@@ -90,6 +92,8 @@ export function persistentImap(idleMs = IMAP_IDLE_MS, connect: ImapConnect = con
 export class MailSession {
   private readonly imap = persistentImap();
   private context?: ConnectorContext;
+  /** Kept with the object so Google access tokens are reused across requests. */
+  private google?: GoogleAccounts | null;
 
   constructor(
     _state: unknown,
@@ -108,10 +112,20 @@ export class MailSession {
     return this.context;
   }
 
+  private googleAccounts(origin: string): GoogleAccounts | undefined {
+    if (this.google === undefined) this.google = googleAccountsFor(this.env) ?? null;
+    if (this.google) this.google.manageUrl = `${origin}/accounts`;
+    return this.google ?? undefined;
+  }
+
   async fetch(request: Request): Promise<Response> {
-    const context = this.connector();
-    await context.refresh();
-    const server = createMcpServer(context, { remote: true });
+    const origin = new URL(this.env.ICLOUD_MAIL_PUBLIC_URL || request.url).origin;
+    const icloud = this.env.ICLOUD_MAIL_PREFERENCES ? this.connector() : undefined;
+    await icloud?.refresh();
+    const server = await createConnectorServer(
+      { icloud, google: this.googleAccounts(origin) },
+      { remote: true }
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

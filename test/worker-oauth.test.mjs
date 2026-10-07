@@ -41,6 +41,9 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     APPLE_MAIL_MCP_SMTP_FROM: sender,
     APPLE_MAIL_MCP_SMTP_ALLOWED_FROM: "alias@example.com",
     ICLOUD_MAIL_ADDRESS_DISCOVERY: "off",
+    GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
+    GOOGLE_CLIENT_SECRET: "unused",
+    CONNECTOR_SECRET_KEY: "0123456789abcdef0123456789abcdef",
   };
   const child = spawn(
     join(root, "node_modules/.bin/wrangler"),
@@ -199,7 +202,23 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     const listed = await (
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
-    assert.equal(listed.result.tools.length, 20);
+    const names = listed.result.tools.map((tool) => tool.name);
+    // 20 iCloud tools, 29 Gmail, 8 Calendar and list_accounts.
+    assert.equal(names.length, 58, names.join(", "));
+    for (const name of [
+      "search_messages",
+      "gmail_search_threads",
+      "gmail_reply",
+      "calendar_list_events",
+      "list_accounts",
+    ]) {
+      assert(names.includes(name), `${name} is listed`);
+    }
+    assert.equal(names.filter((name) => name.startsWith("gmail_")).length, 29);
+    assert.equal(names.filter((name) => name.startsWith("calendar_")).length, 8);
+    for (const tool of listed.result.tools) {
+      assert(!JSON.stringify(tool.inputSchema).includes('"$ref"'), `${tool.name}: no $ref`);
+    }
     // A host must accept null before a tools/call can reach the Worker.
     const schemas = new AjvJsonSchemaValidator();
     for (const tool of listed.result.tools) {
@@ -291,6 +310,83 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     }
     const unchanged = JSON.parse((await tool(9, "get_signature", { from: null })).content[0].text);
     assert.deepEqual(unchanged, reread, "rejected calls must not change settings");
+
+    // Google tools explain how to link an account before one is linked.
+    const unlinked = await tool(10, "gmail_search_threads", { query: "is:unread", account: null });
+    assert.ok(unlinked.isError, JSON.stringify(unlinked));
+    assert.match(
+      unlinked.content[0].text,
+      new RegExp(`No Google account is linked.*${base}/accounts`)
+    );
+    const accounts = JSON.parse((await tool(11, "list_accounts", {})).content[0].text);
+    assert.deepEqual(accounts.icloud.account, sender);
+    assert.deepEqual(accounts.google, []);
+    assert.equal(accounts.manageGoogleAccounts, `${base}/accounts`);
+
+    // /accounts is gated by the owner password and links through Google with PKCE.
+    const login = await fetch(`${base}/accounts`);
+    assert.equal(login.status, 200);
+    assert.match(
+      login.headers.get("content-security-policy"),
+      /form-action 'self' https:\/\/accounts\.google\.com/
+    );
+    assert.match(await login.text(), /Owner password/);
+    const post = (fields, cookieHeader, path = "/accounts") =>
+      fetch(`${base}${path}`, {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          ...(cookieHeader && { Cookie: cookieHeader }),
+        },
+        body: new URLSearchParams(fields),
+      });
+    assert.equal(
+      (await post({ action: "login", password: "wrong password, long enough" })).status,
+      401
+    );
+    const signedIn = await post({ action: "login", password: ownerPassword });
+    assert.equal(signedIn.status, 303);
+    const setCookie = signedIn.headers.get("set-cookie");
+    assert.match(setCookie, /HttpOnly/);
+    assert.match(setCookie, /SameSite=Lax/);
+    const session = setCookie.split(";")[0];
+    const list = await (await fetch(`${base}/accounts`, { headers: { Cookie: session } })).text();
+    assert.match(list, /No Google account is linked yet/);
+    const csrf = list.match(/name="csrf" value="([^"]+)"/)[1];
+    assert.equal((await post({ action: "link", csrf: "forged" }, session)).status, 403);
+    assert.equal((await post({ action: "link", csrf })).status, 401);
+    const linking = await post({ action: "link", csrf }, session);
+    assert.equal(linking.status, 303);
+    const google = new URL(linking.headers.get("location"));
+    assert.equal(google.origin, "https://accounts.google.com");
+    assert.equal(google.searchParams.get("client_id"), vars.GOOGLE_CLIENT_ID);
+    assert.equal(google.searchParams.get("redirect_uri"), `${base}/accounts/google/callback`);
+    assert.equal(google.searchParams.get("code_challenge_method"), "S256");
+    assert.match(google.searchParams.get("scope"), /gmail\.modify .*calendar/);
+    const state = google.searchParams.get("state");
+    // The callback only completes in the browser session that started it.
+    const googleCallback = (query, cookieHeader) =>
+      fetch(`${base}/accounts/google/callback?${new URLSearchParams(query)}`, {
+        headers: cookieHeader ? { Cookie: cookieHeader } : {},
+      });
+    assert.equal((await googleCallback({ state, code: "x" })).status, 403);
+    assert.equal(
+      (await googleCallback({ state, error: "access_denied" }, session)).status,
+      400,
+      "state is single use"
+    );
+    const second = await post({ action: "link", csrf }, session);
+    const secondState = new URL(second.headers.get("location")).searchParams.get("state");
+    const denied = await googleCallback({ state: secondState, error: "access_denied" }, session);
+    assert.equal(denied.status, 200);
+    assert.match(await denied.text(), /Google access was not granted/);
+    const signedOut = await post({ action: "logout", csrf }, session);
+    assert.equal(signedOut.status, 303);
+    assert.match(
+      await (await fetch(`${base}/accounts`, { headers: { Cookie: session } })).text(),
+      /Owner password/
+    );
   } finally {
     child.kill();
     await new Promise((resolve) => {

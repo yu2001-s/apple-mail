@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.6.0 — 2026-10-08
+
+- Serve Gmail and Google Calendar for any number of Google accounts from the
+  Worker, on the same connector URL. Accounts are linked and removed at
+  `/accounts` behind the owner password; refresh tokens are stored in KV
+  encrypted with the new `CONNECTOR_SECRET_KEY`. See docs/GOOGLE.md.
+- 29 `gmail_*` tools matching Google's Gmail connector (threads, messages,
+  attachments, drafts, send, reply, forward, labels, trash, spam), each with an
+  `account` argument; `gmail_search_threads` searches every account when it is
+  omitted. Draft updates keep attachments unless replaced.
+- 8 `calendar_*` tools: calendars, events merged across accounts, create,
+  update, delete, RSVP, and free time across every account.
+- `list_accounts` lists the iCloud account and each linked Google account.
+- `scripts/setup-worker.mjs` uploads `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
+  creates `CONNECTOR_SECRET_KEY` once, and now stops if it cannot list the
+  existing secrets instead of replacing them.
+
 ## 1.5.0 — 2026-10-05
 
 - Serve MCP on the Worker from a Durable Object that keeps one IMAP

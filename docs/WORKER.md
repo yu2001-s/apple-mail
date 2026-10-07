@@ -6,9 +6,12 @@ is installed per device and no computer has to stay on.
 
 ```text
 Claude / ChatGPT (any device) ──HTTPS──▶ Worker: OAuth + MCP ──TLS──▶ iCloud IMAP / SMTP
-                                            │
-                                            └─ KV: OAuth clients and grants only
+                                            │                 └─HTTPS─▶ Gmail / Calendar APIs
+                                            └─ KV: OAuth grants, settings, sealed Google tokens
 ```
+
+Gmail and Google Calendar accounts are optional; set them up with
+[GOOGLE.md](GOOGLE.md) after the steps below.
 
 ## Deploy
 
@@ -85,7 +88,8 @@ the host's full-match validation, while a prefix-only `^imap:` does not.
 
 To revoke every connection, delete the entries in the Worker's `OAUTH_KV`
 namespace from the Cloudflare dashboard; each client then has to be approved
-again with the owner password.
+again with the owner password. Leave `google-accounts:v1` in place unless you
+also mean to unlink every Google account.
 
 ## How it differs from the local plugin
 

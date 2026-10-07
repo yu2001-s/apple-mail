@@ -1,15 +1,16 @@
 import type { ConsentDescription } from "@cloudflare/workers-oauth-provider";
+import { escapeHtml } from "../utils/escapeHtml.js";
 
-export function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-}
+export { escapeHtml };
 
 const STYLE = `body{font:16px system-ui,sans-serif;max-width:28rem;margin:4rem auto;padding:0 1rem;color:#1d1d1f;background:#fff}
 @media (prefers-color-scheme:dark){body{color:#f5f5f7;background:#1d1d1f}}
 input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin-top:.5rem}
-.row{display:flex;flex-direction:row-reverse;gap:.5rem}.error{color:#d70015}`;
+.row{display:flex;flex-direction:row-reverse;gap:.5rem}.error{color:#d70015}.ok{color:#248a3d}.note{color:#6e6e73;font-size:.9rem}
+.accounts{list-style:none;padding:0}.accounts li{display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.5rem 0;border-bottom:1px solid #8884;overflow-wrap:anywhere}
+.accounts form{margin:0;flex:none}.accounts button{width:auto;margin:0}`;
 
-function page(title: string, body: string): string {
+export function page(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(title)}</title><style>${STYLE}</style></head>
