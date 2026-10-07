@@ -203,8 +203,8 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
     const names = listed.result.tools.map((tool) => tool.name);
-    // 20 iCloud tools, 29 Gmail, 8 Calendar and list_accounts.
-    assert.equal(names.length, 58, names.join(", "));
+    // 20 iCloud tools, 29 Gmail, 8 Calendar, list_accounts and set_account_nickname.
+    assert.equal(names.length, 59, names.join(", "));
     for (const name of [
       "search_messages",
       "gmail_search_threads",

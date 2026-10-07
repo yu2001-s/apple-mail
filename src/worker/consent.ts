@@ -8,7 +8,8 @@ const STYLE = `body{font:16px system-ui,sans-serif;max-width:28rem;margin:4rem a
 input,button{font:inherit;padding:.6rem;width:100%;box-sizing:border-box;margin-top:.5rem}
 .row{display:flex;flex-direction:row-reverse;gap:.5rem}.error{color:#d70015}.ok{color:#248a3d}.note{color:#6e6e73;font-size:.9rem}
 .accounts{list-style:none;padding:0}.accounts li{display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.5rem 0;border-bottom:1px solid #8884;overflow-wrap:anywhere}
-.accounts form{margin:0;flex:none}.accounts button{width:auto;margin:0}`;
+.accounts li>div{flex:1;min-width:0}.accounts form{margin:0;flex:none}.accounts button{width:auto;margin:0}
+.nickname{display:flex;gap:.4rem;margin-top:.4rem}.nickname input{margin:0;padding:.35rem;flex:1;min-width:0}.nickname button{padding:.35rem .7rem}`;
 
 export function page(title: string, body: string): string {
   return `<!doctype html>

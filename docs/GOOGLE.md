@@ -76,7 +76,10 @@ owner password, and choose **Link a Google account**. On Google's screens:
    account works without those tools until it is linked again.
 
 Repeat for each account. The page lists linked accounts with **Remove**, which
-also revokes the grant at Google. Changes reach Claude within about a minute.
+also revokes the grant at Google, and a **nickname** field: give an account a
+short name such as `work` or `personal` and Claude accepts it anywhere it takes
+an account ("search my work mail"). You can also ask Claude to set one; it uses
+`set_account_nickname`. Changes reach Claude within about a minute.
 You don't need to reconnect anything in Claude. In ChatGPT, open the connector's
 **Manage** page and choose **Refresh tools** once after this upgrade, because
 it keeps its own copy of the tool list.
@@ -91,7 +94,7 @@ app → OAuth app name or client ID → **Trusted**.
 
 ## Tools
 
-Every Google tool takes `account`, the Google address. It may be left out when
+Every Google tool takes `account`, the Google address or its nickname. It may be left out when
 only one Google account is linked. Searching mail, listing events and finding
 free time cover **every** linked account when `account` is left out. Results
 always say which account they came from, and IDs only work with that account.
@@ -122,8 +125,8 @@ always say which account they came from, and IDs only work with that account.
 | `calendar_respond_to_event` | accept, decline, tentative |
 | `calendar_find_free_time` | free windows across every linked account |
 
-`list_accounts` shows the iCloud account and each Google account with the
-services it granted.
+`list_accounts` shows the iCloud account and each Google account with its
+nickname and the services it granted; `set_account_nickname` names an account.
 
 How this differs from Google's own Gmail connector:
 

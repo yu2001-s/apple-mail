@@ -13,6 +13,8 @@
 - 8 `calendar_*` tools: calendars, events merged across accounts, create,
   update, delete, RSVP, and free time across every account.
 - `list_accounts` lists the iCloud account and each linked Google account.
+- Nicknames for Google accounts (e.g. `work`), set on `/accounts` or with
+  `set_account_nickname`, accepted wherever a tool takes `account`.
 - `scripts/setup-worker.mjs` uploads `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
   creates `CONNECTOR_SECRET_KEY` once, and now stops if it cannot list the
   existing secrets instead of replacing them.

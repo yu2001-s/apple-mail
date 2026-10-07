@@ -32,6 +32,8 @@ export interface StoredGoogleAccount {
   sub: string;
   scopes: string[];
   addedAt: string;
+  /** The owner's short name for the account, usable wherever an address is. */
+  nickname?: string;
   /** Sealed with CONNECTOR_SECRET_KEY, bound to `email`. */
   refreshToken: string;
 }
@@ -66,8 +68,28 @@ export function kvGoogleAccountStore(kv: KvLike, key = "google-accounts:v1"): Go
 
 export interface GoogleAccountSummary {
   email: string;
+  nickname?: string;
   services: GoogleService[];
   addedAt: string;
+}
+
+/** Letters and digits in any script, then also spaces, dots, dashes and underscores. */
+const NICKNAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$/u;
+
+/** A trimmed nickname, or "" to clear one; throws when it cannot name an account. */
+export function normalizeNickname(value: string): string {
+  const nickname = value.trim().replace(/\s+/g, " ");
+  if (nickname && !NICKNAME.test(nickname)) {
+    throw new Error(
+      "A nickname is 1-32 letters, digits, spaces, dots, dashes or underscores, starting with a letter or digit."
+    );
+  }
+  return nickname;
+}
+
+/** `nickname (address)`, or the address alone. */
+export function accountName(account: { email: string; nickname?: string }): string {
+  return account.nickname ? `${account.nickname} (${account.email})` : account.email;
 }
 
 export class GoogleApiError extends Error {
@@ -105,6 +127,13 @@ function same(a: string, b: string): boolean {
   return a.trim().toLowerCase() === b.trim().toLowerCase();
 }
 
+/** True when `query` is the account's address or nickname. */
+function names(account: StoredGoogleAccount, query: string): boolean {
+  return (
+    same(account.email, query) || (Boolean(account.nickname) && same(account.nickname!, query))
+  );
+}
+
 export class GoogleAccounts {
   manageUrl: string;
   private readonly fetchImpl: Fetch;
@@ -127,6 +156,7 @@ export class GoogleAccounts {
   async summaries(): Promise<GoogleAccountSummary[]> {
     return (await this.accounts()).map((account) => ({
       email: account.email,
+      ...(account.nickname && { nickname: account.nickname }),
       services: (Object.keys(SERVICE_SCOPES) as GoogleService[]).filter((service) =>
         account.scopes.includes(SERVICE_SCOPES[service])
       ),
@@ -137,11 +167,13 @@ export class GoogleAccounts {
   /** Add an account, or replace the tokens of one linked before. */
   async link(tokens: LinkedTokens): Promise<void> {
     const key = await this.options.key;
-    const accounts = (await this.accounts()).filter(
-      (account) => !same(account.email, tokens.email)
-    );
+    const existing = await this.accounts();
+    // Linking an account again keeps its nickname.
+    const nickname = existing.find((account) => same(account.email, tokens.email))?.nickname;
+    const accounts = existing.filter((account) => !same(account.email, tokens.email));
     accounts.push({
       email: tokens.email,
+      ...(nickname && { nickname }),
       sub: tokens.sub,
       scopes: tokens.scopes,
       addedAt: new Date(this.now()).toISOString(),
@@ -155,10 +187,30 @@ export class GoogleAccounts {
     });
   }
 
+  /** Set or, with "", clear the nickname of the account `account` (address or nickname) names. */
+  async setNickname(account: string, value: string): Promise<GoogleAccountSummary> {
+    const nickname = normalizeNickname(value);
+    const accounts = await this.accounts();
+    const found = accounts.find((item) => names(item, account));
+    if (!found) {
+      throw new Error(
+        `"${account}" is not a linked Google account. Linked: ${accounts.map(accountName).join(", ")}.`
+      );
+    }
+    const taken = accounts.find(
+      (item) => item !== found && nickname && item.nickname && same(item.nickname, nickname)
+    );
+    if (taken) throw new Error(`"${nickname}" already names ${taken.email}.`);
+    if (nickname) found.nickname = nickname;
+    else delete found.nickname;
+    await this.options.store.save(accounts);
+    return (await this.summaries()).find((item) => item.email === found.email)!;
+  }
+
   /** Remove an account and revoke its access at Google. */
   async unlink(email: string): Promise<boolean> {
     const accounts = await this.accounts();
-    const found = accounts.find((account) => same(account.email, email));
+    const found = accounts.find((account) => names(account, email));
     if (!found) return false;
     await this.options.store.save(accounts.filter((account) => account !== found));
     this.tokens.delete(found.email);
@@ -187,10 +239,10 @@ export class GoogleAccounts {
     }
     const scope = SERVICE_SCOPES[service];
     if (account) {
-      const found = accounts.find((item) => same(item.email, account));
+      const found = accounts.find((item) => names(item, account));
       if (!found) {
         throw new Error(
-          `"${account}" is not a linked Google account. Linked: ${accounts.map((a) => a.email).join(", ")}.`
+          `"${account}" is not a linked Google account or nickname. Linked: ${accounts.map(accountName).join(", ")}.`
         );
       }
       if (!found.scopes.includes(scope)) {
@@ -200,7 +252,8 @@ export class GoogleAccounts {
       }
       return [found.email];
     }
-    const usable = accounts.filter((item) => item.scopes.includes(scope)).map((a) => a.email);
+    const granted = accounts.filter((item) => item.scopes.includes(scope));
+    const usable = granted.map((a) => a.email);
     if (!usable.length) {
       throw new Error(
         `No linked Google account granted ${SERVICE_NAMES[service]} access. The user can link one at ${this.manageUrl}.`
@@ -208,7 +261,7 @@ export class GoogleAccounts {
     }
     if (single && usable.length > 1) {
       throw new Error(
-        `Several Google accounts are linked; pass account as one of: ${usable.join(", ")}.`
+        `Several Google accounts are linked; pass account as one of: ${granted.map(accountName).join(", ")}.`
       );
     }
     return usable;

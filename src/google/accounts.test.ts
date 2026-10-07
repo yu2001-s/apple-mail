@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   batchBody,
   GoogleAccounts,
+  normalizeNickname,
   kvGoogleAccountStore,
   parseBatchResponse,
   type StoredGoogleAccount,
@@ -172,6 +173,58 @@ describe("GoogleAccounts", () => {
     await expect(accounts.resolve("b@work.com", "calendar")).rejects.toThrow(
       /did not grant Calendar/
     );
+  });
+
+  it("names accounts by nickname", async () => {
+    const { accounts } = await linked();
+    await accounts.link({
+      email: "b@work.com",
+      sub: "2",
+      refreshToken: "r2",
+      accessToken: "a2",
+      expiresIn: 3600,
+      scopes: [GMAIL_SCOPE, CALENDAR_SCOPE],
+    });
+    expect(await accounts.setNickname("b@work.com", "  Work  ")).toMatchObject({
+      email: "b@work.com",
+      nickname: "Work",
+    });
+    await accounts.setNickname("a@gmail.com", "個人");
+    expect(await accounts.resolve("work", "gmail")).toBe("b@work.com");
+    expect(await accounts.resolve("個人", "calendar")).toBe("a@gmail.com");
+    await expect(accounts.resolve(undefined, "gmail")).rejects.toThrow(
+      "pass account as one of: 個人 (a@gmail.com), Work (b@work.com)"
+    );
+    await expect(accounts.setNickname("a@gmail.com", "WORK")).rejects.toThrow(
+      /already names b@work.com/
+    );
+    await expect(accounts.setNickname("nobody", "x")).rejects.toThrow(
+      /not a linked Google account/
+    );
+    // Linking again keeps the nickname; an empty one removes it.
+    await accounts.link({
+      email: "b@work.com",
+      sub: "2",
+      refreshToken: "r3",
+      accessToken: "a3",
+      expiresIn: 3600,
+      scopes: [GMAIL_SCOPE],
+    });
+    expect((await accounts.summaries()).find((a) => a.email === "b@work.com")?.nickname).toBe(
+      "Work"
+    );
+    expect((await accounts.setNickname("Work", "")).nickname).toBeUndefined();
+    await expect(accounts.resolve("work", "gmail")).rejects.toThrow(
+      /not a linked Google account or nickname/
+    );
+  });
+
+  it("validates nicknames", () => {
+    expect(normalizeNickname(" side   project ")).toBe("side project");
+    expect(normalizeNickname("")).toBe("");
+    for (const bad of ["me@x.com", "-work", "a".repeat(33), "<b>"]) {
+      expect(() => normalizeNickname(bad)).toThrow(/nickname/);
+    }
   });
 
   it("reports when nothing is linked", async () => {

@@ -123,9 +123,10 @@ async function listPage(
   const hidden = `<input type="hidden" name="csrf" value="${escapeHtml(current.csrf)}">`;
   const rows = accounts
     .map(
-      (account) => `<li><span><strong>${escapeHtml(account.email)}</strong><br><span class="note">${
+      (account) => `<li><div><strong>${escapeHtml(account.email)}</strong><br><span class="note">${
         account.services.length ? escapeHtml(account.services.join(", ")) : "no access granted"
-      }</span></span>
+      }</span>
+<form method="post" action="/accounts" class="nickname">${hidden}<input type="hidden" name="action" value="nickname"><input type="hidden" name="email" value="${escapeHtml(account.email)}"><input name="nickname" value="${escapeHtml(account.nickname ?? "")}" placeholder="Nickname, e.g. work" maxlength="32" aria-label="Nickname for ${escapeHtml(account.email)}"><button>Save</button></form></div>
 <form method="post" action="/accounts">${hidden}<input type="hidden" name="action" value="remove"><input type="hidden" name="email" value="${escapeHtml(account.email)}"><button>Remove</button></form></li>`
     )
     .join("\n");
@@ -134,6 +135,7 @@ ${notice ? `<p class="${notice.ok ? "ok" : "error"}">${escapeHtml(notice.text)}<
 <h2>Google</h2>
 ${accounts.length ? `<ul class="accounts">${rows}</ul>` : "<p>No Google account is linked yet.</p>"}
 <form method="post" action="/accounts">${hidden}<input type="hidden" name="action" value="link"><button>Link a Google account</button></form>
+<p class="note">A nickname such as work or personal can be used instead of the address when asking Claude about an account.</p>
 <p class="note">Allow both Gmail and Calendar on Google's consent screen. Google may warn that the app is unverified: it is your own OAuth client, so choose Advanced, then continue. Changes reach Claude and ChatGPT within a minute.</p>
 <form method="post" action="/accounts">${hidden}<input type="hidden" name="action" value="logout"><button>Sign out</button></form>`);
 }
@@ -246,6 +248,23 @@ export async function handleAccounts(request: Request, env: Env): Promise<Respon
         codeChallenge: challenge,
       })
     );
+  }
+  if (action === "nickname") {
+    const email = String(form.get("email") ?? "");
+    try {
+      const updated = await google.setNickname(email, String(form.get("nickname") ?? ""));
+      return listPage(google, current, {
+        ok: true,
+        text: updated.nickname
+          ? `${updated.email} is now "${updated.nickname}".`
+          : `Removed the nickname of ${updated.email}.`,
+      });
+    } catch (e) {
+      return listPage(google, current, {
+        ok: false,
+        text: e instanceof Error ? e.message : "Could not save the nickname.",
+      });
+    }
   }
   if (action === "remove") {
     const email = String(form.get("email") ?? "");
