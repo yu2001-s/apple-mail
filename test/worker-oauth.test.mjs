@@ -380,7 +380,11 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     const secondState = new URL(second.headers.get("location")).searchParams.get("state");
     const denied = await googleCallback({ state: secondState, error: "access_denied" }, session);
     assert.equal(denied.status, 200);
-    assert.match(await denied.text(), /Google access was not granted/);
+    const deniedPage = await denied.text();
+    assert.match(deniedPage, /Google access was not granted/);
+    // Pages served at the callback URL must still post their forms to /accounts.
+    assert.doesNotMatch(deniedPage, /<form method="post">/);
+    assert.match(deniedPage, /<form method="post" action="\/accounts">/);
     const signedOut = await post({ action: "logout", csrf }, session);
     assert.equal(signedOut.status, 303);
     assert.match(

@@ -105,7 +105,7 @@ function loginPage(error?: string, status = 200): Response {
     `<h1>${TITLE}</h1>
 <p>Link Gmail and Google Calendar accounts to this connector.</p>
 ${error ? `<p class="error">${escapeHtml(error)}</p>` : ""}
-<form method="post">
+<form method="post" action="/accounts">
 <input type="hidden" name="action" value="login">
 <label>Owner password<input type="password" name="password" autocomplete="current-password" autofocus></label>
 <button>Continue</button>
@@ -126,16 +126,16 @@ async function listPage(
       (account) => `<li><span><strong>${escapeHtml(account.email)}</strong><br><span class="note">${
         account.services.length ? escapeHtml(account.services.join(", ")) : "no access granted"
       }</span></span>
-<form method="post">${hidden}<input type="hidden" name="action" value="remove"><input type="hidden" name="email" value="${escapeHtml(account.email)}"><button>Remove</button></form></li>`
+<form method="post" action="/accounts">${hidden}<input type="hidden" name="action" value="remove"><input type="hidden" name="email" value="${escapeHtml(account.email)}"><button>Remove</button></form></li>`
     )
     .join("\n");
   return html(`<h1>${TITLE}</h1>
 ${notice ? `<p class="${notice.ok ? "ok" : "error"}">${escapeHtml(notice.text)}</p>` : ""}
 <h2>Google</h2>
 ${accounts.length ? `<ul class="accounts">${rows}</ul>` : "<p>No Google account is linked yet.</p>"}
-<form method="post">${hidden}<input type="hidden" name="action" value="link"><button>Link a Google account</button></form>
+<form method="post" action="/accounts">${hidden}<input type="hidden" name="action" value="link"><button>Link a Google account</button></form>
 <p class="note">Allow both Gmail and Calendar on Google's consent screen. Google may warn that the app is unverified: it is your own OAuth client, so choose Advanced, then continue. Changes reach Claude and ChatGPT within a minute.</p>
-<form method="post">${hidden}<input type="hidden" name="action" value="logout"><button>Sign out</button></form>`);
+<form method="post" action="/accounts">${hidden}<input type="hidden" name="action" value="logout"><button>Sign out</button></form>`);
 }
 
 export async function handleAccounts(request: Request, env: Env): Promise<Response> {
