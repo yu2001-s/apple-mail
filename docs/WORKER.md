@@ -80,7 +80,14 @@ the host's full-match validation, while a prefix-only `^imap:` does not.
 - Clients may register dynamically (Claude) or present a Client ID Metadata
   Document (ChatGPT), but codes are only ever sent to the claude.ai,
   claude.com and chatgpt.com connector callbacks or to a loopback address. Add
-  exact callbacks with `ICLOUD_MAIL_OAUTH_REDIRECT_URIS`.
+  exact callbacks with `ICLOUD_MAIL_OAUTH_REDIRECT_URIS` (comma-separated).
+- The approval page's CSP `form-action` lists only the allowed callback
+  origins, and browsers check it on every redirect after the form is
+  submitted. If a callback redirects to another host, list that host's
+  callback too. Cursor's `https://www.cursor.com/agents/mcp/oauth/callback`, for
+  example, redirects to `https://cursor.com/agents/mcp/oauth/callback`, so it
+  needs both. Otherwise approving seems to do nothing, and approving again
+  shows "This authorization was not started in this browser".
 - The approval page is bound to the browser that opened it and cannot be
   framed. After 10 wrong owner passwords in an hour, approval is locked for
   everyone until the hour passes.

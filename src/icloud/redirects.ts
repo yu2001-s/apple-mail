@@ -37,7 +37,8 @@ export function isAllowedRedirect(uri: string, extra: Iterable<string> = []): bo
 /**
  * CSP form-action sources for the approval form. Browsers apply form-action
  * to the redirect that follows the submission, so every callback origin the
- * code may be sent to must be listed, not just this server.
+ * code may be sent to must be listed, not just this server. That includes any
+ * host a callback itself redirects to, which must be configured as well.
  */
 export function formActionSources(extra: Iterable<string> = []): string {
   const sources = new Set([

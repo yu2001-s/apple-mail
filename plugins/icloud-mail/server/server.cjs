@@ -102612,6 +102612,24 @@ function isAllowedRedirect(uri, extra = []) {
   if (url2.protocol === "http:" && LOOPBACK_HOSTS2.has(url2.hostname)) return true;
   return url2.protocol === "https:" && url2.hostname === "chatgpt.com" && !url2.port && !url2.search && CHATGPT_CALLBACK.test(url2.pathname);
 }
+function formActionSources(extra = []) {
+  const sources = /* @__PURE__ */ new Set([
+    "'self'",
+    "https://claude.ai",
+    "https://claude.com",
+    "https://chatgpt.com",
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+    "http://[::1]:*"
+  ]);
+  for (const uri of extra) {
+    try {
+      sources.add(new URL(uri).origin);
+    } catch {
+    }
+  }
+  return [...sources].join(" ");
+}
 function parseRedirectList(value) {
   return (value || "").split(",").map((uri) => uri.trim()).filter(Boolean);
 }
@@ -102740,7 +102758,8 @@ var OwnerOAuthProvider = class {
     res.status(200).set({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${target.origin}; frame-ancestors 'none'`,
+      // Every allowed origin, so a callback that redirects to another listed host works.
+      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formActionSources([...this.redirectUris, target.href])}; frame-ancestors 'none'`,
       "Referrer-Policy": "no-referrer",
       "X-Frame-Options": "DENY"
     }).send(`<!doctype html>

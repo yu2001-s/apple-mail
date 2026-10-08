@@ -26,7 +26,7 @@ import type {
   OAuthTokenRevocationRequest,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { isAllowedRedirect } from "./redirects.js";
+import { formActionSources, isAllowedRedirect } from "./redirects.js";
 
 export const MAIL_SCOPE = "mail";
 const ACCESS_TTL_S = 60 * 60;
@@ -211,7 +211,8 @@ export class OwnerOAuthProvider implements OAuthServerProvider {
     res.status(200).set({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${target.origin}; frame-ancestors 'none'`,
+      // Every allowed origin, so a callback that redirects to another listed host works.
+      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action ${formActionSources([...this.redirectUris, target.href])}; frame-ancestors 'none'`,
       "Referrer-Policy": "no-referrer",
       "X-Frame-Options": "DENY",
     }).send(`<!doctype html>

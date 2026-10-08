@@ -53,6 +53,7 @@ test("remote mode requires OAuth and serves the tools to an approved client", as
         ICLOUD_MAIL_PUBLIC_URL: base,
         ICLOUD_MAIL_HTTP_PORT: String(port),
         ICLOUD_MAIL_OWNER_PASSWORD: ownerPassword,
+        ICLOUD_MAIL_OAUTH_REDIRECT_URIS: "https://www.app.example/cb,https://app.example/cb",
       },
     }
   );
@@ -133,6 +134,12 @@ test("remote mode requires OAuth and serves the tools to an approved client", as
     const page = await fetch(authorizeUrl, { redirect: "manual" });
     assert.equal(page.status, 200);
     assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+    // Browsers apply form-action to every redirect after approval, so a configured
+    // callback that redirects to another configured host must not be blocked.
+    assert.match(
+      page.headers.get("content-security-policy"),
+      /form-action [^;]*https:\/\/app\.example/
+    );
     const html = await page.text();
     assert.match(html, /Test &lt;client&gt;/);
     const requestId = html.match(/name="request_id" value="([^"]+)"/)[1];

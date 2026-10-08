@@ -17,6 +17,10 @@ Claude (any device) ──HTTPS──▶ tunnel / reverse proxy ──▶ server
 - Registration accepts only the claude.ai/claude.com callbacks and loopback
   (`http://localhost`, `127.0.0.1`, `[::1]`) callbacks. Add others with
   `ICLOUD_MAIL_OAUTH_REDIRECT_URIS` (comma-separated, exact match).
+- If a callback redirects to another host, as Cursor's
+  `https://www.cursor.com/agents/mcp/oauth/callback` does to `cursor.com`, list
+  both. The approval page's CSP `form-action` lists only the allowed callback
+  origins, and browsers check it on every redirect after the form is submitted.
 - PKCE (S256) is required. Codes are single use and expire after 5 minutes.
   Access tokens last 1 hour and refresh tokens 30 days, rotating on each use.
   Tokens are bound to `<ICLOUD_MAIL_PUBLIC_URL>/mcp` and stored only as SHA-256
