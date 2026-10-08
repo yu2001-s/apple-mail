@@ -15,6 +15,7 @@ import { kvSettingsStore } from "../icloud/settings.js";
 import type { GoogleAccounts } from "../google/accounts.js";
 import { createConnectorServer } from "../mcp/server.js";
 import { googleAccountsFor } from "./accounts.js";
+import { workerUploads } from "./uploads.js";
 import type { Env } from "./index.js";
 
 /** Close the IMAP connection after this long without a tool call. */
@@ -124,7 +125,7 @@ export class MailSession {
     await icloud?.refresh();
     const server = await createConnectorServer(
       { icloud, google: this.googleAccounts(origin) },
-      { remote: true, websiteUrl: `${origin}/` }
+      { remote: true, websiteUrl: `${origin}/`, uploads: workerUploads(this.env, origin) }
     );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

@@ -25,9 +25,17 @@
   `list_sending_addresses`.
 - Nicknames for Google accounts (e.g. `work`), set on `/accounts` or with
   `set_account_nickname`, accepted wherever a tool takes `account`.
+- Attachment uploads: `create_attachment_upload` returns a signed, single-use
+  URL. A client that can run shell commands (Claude Code) uploads a local file
+  to it with `curl -T` and attaches it to iCloud or Gmail mail as
+  `{uploadId}`, so the file never passes through the conversation. Files are
+  kept in a new R2 bucket and deleted once attached, or after a day.
+- The Worker's `create_draft` and `update_draft` no longer describe
+  attachments as local paths, which a remote server cannot read.
 - `scripts/setup-worker.mjs` uploads `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`,
-  creates `CONNECTOR_SECRET_KEY` once, and now stops if it cannot list the
-  existing secrets instead of replacing them.
+  creates `CONNECTOR_SECRET_KEY` once and the uploads bucket with its
+  lifecycle rule, and now stops if it cannot list the existing secrets instead
+  of replacing them.
 
 ## 1.5.0 — 2026-10-05
 

@@ -132,6 +132,9 @@ How this differs from Google's own Gmail connector:
 
 - `gmail_update_draft` keeps a draft's attachments when `attachments` is
   omitted. Google's connector drops them. Pass an empty list to remove them.
+- Attachments may also be uploads from `create_attachment_upload`, attached
+  as `{uploadId}`, so local files need not pass through the conversation (see
+  [WORKER.md](WORKER.md#attachments)).
 - Replies go out from the address the original was sent to when it is one of
   your verified Gmail "Send mail as" addresses.
 - `apply_sensitive_message_label` and `apply_sensitive_thread_label` are left

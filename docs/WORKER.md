@@ -24,7 +24,8 @@ npx wrangler login
 node scripts/setup-worker.mjs
 ```
 
-The script deploys the Worker (creating its KV namespace), then uploads
+The script deploys the Worker (creating its KV namespace and the R2 bucket for
+attachment uploads), then uploads
 everything personal as encrypted Worker secrets: your addresses, the app
 passwords read from Keychain, your preferences and signatures, and a new
 owner password, which it prints once. Save that password; it approves every
@@ -42,7 +43,8 @@ node scripts/setup-worker.mjs --secrets
 Later runs keep the existing owner password; set `ICLOUD_MAIL_OWNER_PASSWORD`
 in the environment to choose or rotate it. Rotating it does not disconnect
 clients you already approved. Redeploy code changes with
-`npx wrangler deploy`.
+`npx wrangler deploy`; run the script once more first if the R2 bucket named in
+`wrangler.jsonc` does not exist yet.
 
 The Worker URL is `https://icloud-mail.<your-subdomain>.workers.dev`; a custom
 domain can be added in the Cloudflare dashboard. If it answers on more than one
@@ -72,6 +74,26 @@ See [OpenAI's metadata refresh guide](https://developers.openai.com/plugins/depl
 ID patterns must match the complete value: `^imap:[A-Za-z0-9_-]+$` works with
 the host's full-match validation, while a prefix-only `^imap:` does not.
 
+## Attachments
+
+The Worker cannot read files on your computer, so an attachment reaches it in
+one of two ways:
+
+- **Inline**: `{filename, contentBase64}` in the tool call. The model has to
+  write out every base64 character, so this suits small files it produced
+  itself.
+- **Upload**: in a client that can run shell commands, such as Claude Code,
+  `create_attachment_upload` returns a one-time URL. The client uploads the
+  file to it with `curl -T` and attaches it as `{uploadId}`, to iCloud drafts
+  (`create_draft`, `update_draft`) or Gmail (`gmail_create_draft`,
+  `gmail_update_draft`, `gmail_send_message`). The file never passes through
+  the conversation. Up to 25 MiB.
+
+Uploads are kept in the R2 bucket named in `wrangler.jsonc` and deleted once a
+draft or message has them. A draft that fails keeps its uploads, so the same
+`uploadId` can be retried. A lifecycle rule set by `setup-worker.mjs` deletes
+anything left after a day.
+
 ## Security
 
 - `@cloudflare/workers-oauth-provider` implements OAuth 2.1: PKCE, single-use
@@ -91,7 +113,12 @@ the host's full-match validation, while a prefix-only `^imap:` does not.
 - The approval page is bound to the browser that opened it and cannot be
   framed. After 10 wrong owner passwords in an hour, approval is locked for
   everyone until the hour passes.
-- Attachments must be sent inline; the Worker has no files to read.
+- Upload links are signed with a key derived from `CONNECTOR_SECRET_KEY`.
+  Each names its file, expires after 15 minutes and accepts one PUT of at most
+  25 MiB. A link cannot read anything back; only the connector, behind OAuth,
+  reads an upload. If someone else uses a link first, your upload fails with
+  409 instead of being replaced. The upload reports a sha256 to compare with
+  `shasum -a 256`.
 
 To revoke every connection, delete the entries in the Worker's `OAUTH_KV`
 namespace from the Cloudflare dashboard; each client then has to be approved

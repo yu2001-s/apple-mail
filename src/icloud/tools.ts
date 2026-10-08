@@ -2,6 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { registerTool, toolResult } from "../mcp/tooling.js";
 import {
+  uploadRefShape,
+  withUploads,
+  type UploadedFile,
+  type UploadRef,
+  type Uploads,
+} from "../mcp/uploads.js";
+import {
   encodeImapId,
   imapReadMessage,
   imapListAttachments,
@@ -32,6 +39,8 @@ declare const CONNECTOR_VERSION: string;
 export interface ToolOptions {
   /** Served over HTTP to remote clients rather than to a local host over stdio. */
   remote?: boolean;
+  /** Accepts attachments uploaded with create_attachment_upload. */
+  uploads?: Uploads;
 }
 
 /** How long discovered addresses are trusted before Sent is scanned again. */
@@ -124,20 +133,35 @@ export function registerIcloudTools(
     filename: z.string().min(1).max(255),
     contentBase64: z.string().min(1),
   });
+  const { uploads } = options;
   // A remote server must never read its own files on a caller's behalf.
   const attachments = z
     .array(
-      options.remote
-        ? inlineAttachment
-        : z.union([z.string().regex(/^[/].*$/, "Use an absolute path."), inlineAttachment])
+      !options.remote
+        ? z.union([z.string().regex(/^[/].*$/, "Use an absolute path."), inlineAttachment])
+        : uploads
+          ? z.union([inlineAttachment, z.object(uploadRefShape())])
+          : inlineAttachment
     )
     .max(20)
     .optional()
     .describe(
-      options.remote
-        ? "Inline attachments as {filename, contentBase64}."
-        : "Absolute local file paths, or inline {filename, contentBase64} objects."
+      !options.remote
+        ? "Absolute local file paths, or inline {filename, contentBase64} objects."
+        : uploads
+          ? "Inline {filename, contentBase64} objects, or {uploadId} from create_attachment_upload for an existing file."
+          : "Inline attachments as {filename, contentBase64}."
     );
+  const attachmentHelp = !options.remote
+    ? "Attachments are absolute local paths or inline base64 content."
+    : uploads
+      ? "Attachments are inline base64 content, or uploads from create_attachment_upload; prefer an upload for an existing file."
+      : "Attachments are inline base64 content.";
+  const uploaded = (file: UploadedFile, ref: UploadRef) => ({
+    filename: ref.filename ?? file.filename,
+    content: file.content,
+    contentType: file.contentType,
+  });
   const includeSignature = z
     .boolean()
     .optional()
@@ -459,7 +483,7 @@ export function registerIcloudTools(
   );
   tool(
     "create_draft",
-    `Save a new draft on iCloud via IMAP. Does not send. Defaults to sending as the primary address; override from only when requested. Automatically adds the sender's saved signature once in text and HTML; includeSignature=false preserves supplied content. Attachments are absolute local paths or inline base64 content.`,
+    `Save a new draft on iCloud via IMAP. Does not send. Defaults to sending as the primary address; override from only when requested. Automatically adds the sender's saved signature once in text and HTML; includeSignature=false preserves supplied content. ${attachmentHelp}`,
     {
       from: from(),
       to: emails(),
@@ -473,11 +497,13 @@ export function registerIcloudTools(
     },
     false,
     (args) =>
-      drafts.createDraft(
-        withSignature<ImapDraftCreateInput & { includeSignature?: boolean }>(
-          { ...args, from: sender(args.from) },
-          ctx.settings,
-          ctx.settings.primaryAddress
+      withUploads(uploads, args.attachments, uploaded, (attachments) =>
+        drafts.createDraft(
+          withSignature<ImapDraftCreateInput & { includeSignature?: boolean }>(
+            { ...args, attachments, from: sender(args.from) },
+            ctx.settings,
+            ctx.settings.primaryAddress
+          )
         )
       )
   );
@@ -539,7 +565,7 @@ export function registerIcloudTools(
   );
   tool(
     "update_draft",
-    "Update a managed draft on iCloud. Pass the current revision to detect concurrent edits. Supplied text/HTML body content includes the saved sender signature once unless includeSignature=false. Attachment-only or header-only edits preserve the existing body.",
+    `Update a managed draft on iCloud. Pass the current revision to detect concurrent edits. Supplied text/HTML body content includes the saved sender signature once unless includeSignature=false. Attachment-only or header-only edits preserve the existing body. ${attachmentHelp}`,
     {
       draftId,
       expectedRevision: z.string().min(1),
@@ -570,7 +596,12 @@ export function registerIcloudTools(
         if (!current.success || !current.draft) return current;
         signer = addressesIn(current.draft.from)[0] ?? current.draft.from;
       }
-      return drafts.updateDraft(draftId, withSignature(update, ctx.settings, signer));
+      return withUploads(uploads, update.attachmentsToAdd, uploaded, (attachmentsToAdd) =>
+        drafts.updateDraft(
+          draftId,
+          withSignature({ ...update, attachmentsToAdd }, ctx.settings, signer)
+        )
+      );
     }
   );
   tool(

@@ -20,6 +20,7 @@ import { handleAccounts } from "./accounts.js";
 import { consentPage, messagePage, retryPage } from "./consent.js";
 import { CONNECTOR_TITLE } from "../mcp/identity.js";
 import { homePage, privacyPage } from "./pages.js";
+import { handleUpload, type R2 } from "./uploads.js";
 import {
   consentFormAction,
   failures,
@@ -61,8 +62,10 @@ export interface Env {
   /** Google OAuth client for linking Gmail and Calendar accounts. See docs/GOOGLE.md. */
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
-  /** Encrypts stored Google refresh tokens. Secret, at least 32 characters. */
+  /** Encrypts stored Google refresh tokens and signs upload links. Secret, at least 32 characters. */
   CONNECTOR_SECRET_KEY?: string;
+  /** Files uploaded for attachments; see src/worker/uploads.ts. */
+  UPLOADS?: R2;
   [key: string]: unknown;
 }
 
@@ -165,6 +168,7 @@ const appHandler = {
     if (pathname === "/accounts" || pathname.startsWith("/accounts/")) {
       return handleAccounts(request, env);
     }
+    if (pathname.startsWith("/uploads/")) return handleUpload(request, env);
     if (pathname === "/healthz") return Response.json({ ok: true });
     if (pathname === "/") return homePage();
     if (pathname === "/privacy") return privacyPage();

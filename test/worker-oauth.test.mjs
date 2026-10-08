@@ -207,9 +207,11 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       await rpc(tokens.access_token, { jsonrpc: "2.0", id: 2, method: "tools/list" })
     ).json();
     const names = listed.result.tools.map((tool) => tool.name);
-    // 21 iCloud tools, 29 Gmail, 8 Calendar, list_accounts and set_account_nickname.
-    assert.equal(names.length, 60, names.join(", "));
+    // 21 iCloud tools, 29 Gmail, 8 Calendar, list_accounts, set_account_nickname
+    // and create_attachment_upload.
+    assert.equal(names.length, 61, names.join(", "));
     for (const name of [
+      "create_attachment_upload",
       "search_messages",
       "gmail_search_threads",
       "gmail_reply",
@@ -261,7 +263,9 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
       createDraft.inputSchema.properties.attachments
     );
     assert(validateAttachments([{ filename: "test.txt", contentBase64: "dGVzdA==" }]).valid);
+    assert(validateAttachments([{ uploadId: "up_AAAAAAAAAAAAAAAAAAAAAA" }]).valid);
     assert(!validateAttachments(["/tmp/test.txt"]).valid);
+    assert(!validateAttachments([{ uploadId: "up_" }]).valid);
     const signature = await (
       await rpc(tokens.access_token, {
         jsonrpc: "2.0",
@@ -326,6 +330,37 @@ test("worker requires OAuth, gates approval on the owner password, and serves th
     assert.deepEqual(accounts.icloud.account, sender);
     assert.deepEqual(accounts.google, []);
     assert.equal(accounts.manageGoogleAccounts, `${base}/accounts`);
+
+    // A local file reaches R2 through a signed, single-use link, not the conversation.
+    const ticket = JSON.parse(
+      (await tool(12, "create_attachment_upload", { filename: "Bob's notes.txt" })).content[0].text
+    );
+    assert.match(ticket.uploadId, /^up_[A-Za-z0-9_-]{22}$/);
+    assert(ticket.uploadUrl.startsWith(`${base}/uploads/${ticket.uploadId}?`));
+    assert(ticket.command.includes(`'${ticket.uploadUrl}'`));
+    const upload = (url, body) => fetch(url, { method: "PUT", body });
+    const forged = new URL(ticket.uploadUrl);
+    forged.searchParams.set("filename", "other.txt");
+    assert.equal((await upload(forged, "x")).status, 403);
+    assert.equal((await fetch(ticket.uploadUrl)).status, 405);
+    const uploaded = await upload(ticket.uploadUrl, "hello");
+    assert.equal(uploaded.status, 201, await uploaded.clone().text());
+    assert.deepEqual(await uploaded.json(), {
+      uploadId: ticket.uploadId,
+      filename: "Bob's notes.txt",
+      size: 5,
+      sha256: createHash("sha256").update("hello").digest("hex"),
+    });
+    assert.equal((await upload(ticket.uploadUrl, "again")).status, 409);
+    // An unknown upload fails before any mail server is contacted.
+    const missing = await tool(13, "create_draft", {
+      to: ["friend@example.com"],
+      subject: "Notes",
+      body: "Attached.",
+      attachments: [{ uploadId: "up_AAAAAAAAAAAAAAAAAAAAAA" }],
+    });
+    assert.ok(missing.isError, JSON.stringify(missing));
+    assert.match(missing.content[0].text, /create_attachment_upload/);
 
     // /accounts is gated by the owner password and links through Google with PKCE.
     const login = await fetch(`${base}/accounts`);

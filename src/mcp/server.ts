@@ -9,6 +9,7 @@ import type { GoogleAccounts } from "../google/accounts.js";
 import { googleInstructions, registerGoogleTools } from "../google/tools.js";
 import { CONNECTOR_DESCRIPTION, CONNECTOR_NAME, CONNECTOR_TITLE } from "./identity.js";
 import { registerTool, toolResult } from "./tooling.js";
+import { registerUploadTool, UPLOAD_INSTRUCTIONS } from "./uploads.js";
 
 declare const CONNECTOR_VERSION: string;
 
@@ -32,6 +33,8 @@ export async function createConnectorServer(
     const linked = await google.summaries().catch(() => []);
     parts.push(googleInstructions(linked, google.manageUrl));
   }
+  const uploads = icloud || google ? options.uploads : undefined;
+  if (uploads) parts.push(UPLOAD_INSTRUCTIONS);
   parts.push(
     "Use list_accounts to see every connected account. When the user asks about mail or calendar without naming an account, cover all of them."
   );
@@ -46,7 +49,8 @@ export async function createConnectorServer(
     { instructions: parts.join("\n\n") }
   );
   if (icloud) registerIcloudTools(server, icloud, options);
-  if (google) registerGoogleTools(server, google);
+  if (google) registerGoogleTools(server, google, uploads);
+  if (uploads) registerUploadTool(server, uploads);
   registerTool(
     server,
     "list_accounts",

@@ -15,8 +15,8 @@
 // a new key makes every linked Google account unreadable.
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -118,7 +118,46 @@ if (googleId) {
   secrets.GOOGLE_CLIENT_SECRET = googleSecret;
 }
 
-if (!process.argv.includes("--secrets")) run(["deploy"]);
+/**
+ * The R2 bucket named in wrangler.jsonc for attachment uploads, with a rule
+ * that deletes uploads still there after a day (attached ones are deleted at once).
+ */
+function ensureUploadsBucket() {
+  const bucket = /"bucket_name":\s*"([^"]+)"/.exec(
+    readFileSync(join(root, "wrangler.jsonc"), "utf8")
+  )?.[1];
+  if (!bucket) throw new Error("wrangler.jsonc names no R2 bucket for uploads.");
+  const info = spawnSync(wrangler, ["r2", "bucket", "info", bucket], {
+    cwd: root,
+    stdio: "ignore",
+  });
+  if (info.status !== 0) run(["r2", "bucket", "create", bucket]);
+  const dir = mkdtempSync(join(tmpdir(), "icloud-mail-lifecycle-"));
+  const file = join(dir, "lifecycle.json");
+  writeFileSync(
+    file,
+    JSON.stringify({
+      rules: [
+        {
+          id: "delete-uploads-after-a-day",
+          enabled: true,
+          conditions: { prefix: "uploads/" },
+          deleteObjectsTransition: { condition: { type: "Age", maxAge: 24 * 60 * 60 } },
+        },
+      ],
+    })
+  );
+  try {
+    run(["r2", "bucket", "lifecycle", "set", bucket, "--file", file, "--force"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+if (!process.argv.includes("--secrets")) {
+  ensureUploadsBucket();
+  run(["deploy"]);
+}
 const existing = existingSecrets();
 let generated = false;
 if (chosen) secrets.ICLOUD_MAIL_OWNER_PASSWORD = chosen;

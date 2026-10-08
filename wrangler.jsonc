@@ -11,6 +11,9 @@
   // Kept in step with package.json by scripts/sync-plugin-version.mjs.
   "define": { "CONNECTOR_VERSION": "\"1.6.0\"" },
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
+  // Files uploaded for attachments (create_attachment_upload). setup-worker.mjs
+  // creates the bucket and a rule that deletes leftovers after a day.
+  "r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "icloud-mail-uploads" }],
   // Run next to iCloud's IMAP servers: opening a mailbox takes about ten
   // sequential round trips, which cost seconds from a distant data center.
   "placement": { "host": "imap.mail.me.com:993" },

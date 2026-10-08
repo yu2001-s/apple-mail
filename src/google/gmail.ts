@@ -89,8 +89,8 @@ export interface GmailMessage {
 }
 
 export interface AttachmentInput {
-  /** Base64 (standard or URL-safe). */
-  content: string;
+  /** Base64 (standard or URL-safe), or the bytes of an uploaded file. */
+  content: string | Buffer;
   filename?: string;
   mimeType?: string;
   inline?: boolean;
@@ -304,7 +304,10 @@ export function tidyText(text: string): string {
 function attachmentsFromInput(inputs: AttachmentInput[] | undefined): MimeAttachment[] {
   let total = 0;
   return (inputs ?? []).map((input, index) => {
-    const content = decodeInlineAttachment(input.content.replace(/-/g, "+").replace(/_/g, "/"));
+    const content =
+      typeof input.content === "string"
+        ? decodeInlineAttachment(input.content.replace(/-/g, "+").replace(/_/g, "/"))
+        : input.content;
     total += content.length;
     if (total > MAX_INLINE_ATTACHMENT_BYTES) {
       throw new Error("Attachments exceed Gmail's 25 MB limit; share a Drive link instead.");

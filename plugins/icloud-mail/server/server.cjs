@@ -98534,6 +98534,33 @@ function registerTool(server, name, config2, handler) {
   );
 }
 
+// src/mcp/uploads.ts
+var UPLOAD_ID_PATTERN = /^up_[A-Za-z0-9_-]{22}$/;
+function uploadRefShape() {
+  return {
+    uploadId: external_exports.string().regex(UPLOAD_ID_PATTERN, "Use an uploadId returned by create_attachment_upload."),
+    filename: external_exports.string().min(1).max(255).optional().describe("Overrides the name given to create_attachment_upload.")
+  };
+}
+function isUploadRef(value) {
+  return typeof value === "object" && value !== null && "uploadId" in value;
+}
+async function withUploads(uploads, items, attach, run) {
+  const refs = (items ?? []).filter(isUploadRef);
+  if (!refs.length) return run(items);
+  if (!uploads) throw new Error("This server does not accept uploads; attach files inline.");
+  const resolved = await Promise.all(
+    items.map(
+      async (item) => isUploadRef(item) ? attach(await uploads.get(item.uploadId), item) : item
+    )
+  );
+  const result = await run(resolved);
+  if (result?.success !== false) {
+    await uploads.delete([...new Set(refs.map((ref) => ref.uploadId))]).catch(() => void 0);
+  }
+  return result;
+}
+
 // src/icloud/signature.ts
 function signatureFor(preferences, from) {
   return Object.entries(preferences.signatures ?? {}).find(
@@ -98655,11 +98682,18 @@ function registerIcloudTools(server, ctx2, options = {}) {
     filename: external_exports.string().min(1).max(255),
     contentBase64: external_exports.string().min(1)
   });
+  const { uploads } = options;
   const attachments = external_exports.array(
-    options.remote ? inlineAttachment : external_exports.union([external_exports.string().regex(/^[/].*$/, "Use an absolute path."), inlineAttachment])
+    !options.remote ? external_exports.union([external_exports.string().regex(/^[/].*$/, "Use an absolute path."), inlineAttachment]) : uploads ? external_exports.union([inlineAttachment, external_exports.object(uploadRefShape())]) : inlineAttachment
   ).max(20).optional().describe(
-    options.remote ? "Inline attachments as {filename, contentBase64}." : "Absolute local file paths, or inline {filename, contentBase64} objects."
+    !options.remote ? "Absolute local file paths, or inline {filename, contentBase64} objects." : uploads ? "Inline {filename, contentBase64} objects, or {uploadId} from create_attachment_upload for an existing file." : "Inline attachments as {filename, contentBase64}."
   );
+  const attachmentHelp = !options.remote ? "Attachments are absolute local paths or inline base64 content." : uploads ? "Attachments are inline base64 content, or uploads from create_attachment_upload; prefer an upload for an existing file." : "Attachments are inline base64 content.";
+  const uploaded = (file, ref) => ({
+    filename: ref.filename ?? file.filename,
+    content: file.content,
+    contentType: file.contentType
+  });
   const includeSignature = external_exports.boolean().optional().describe(
     "Defaults to true. Add the saved signature once to supplied body content. Set false only when the user requests no signature or a custom signature. Does not remove an existing signature."
   );
@@ -98969,7 +99003,7 @@ function registerIcloudTools(server, ctx2, options = {}) {
   );
   tool(
     "create_draft",
-    `Save a new draft on iCloud via IMAP. Does not send. Defaults to sending as the primary address; override from only when requested. Automatically adds the sender's saved signature once in text and HTML; includeSignature=false preserves supplied content. Attachments are absolute local paths or inline base64 content.`,
+    `Save a new draft on iCloud via IMAP. Does not send. Defaults to sending as the primary address; override from only when requested. Automatically adds the sender's saved signature once in text and HTML; includeSignature=false preserves supplied content. ${attachmentHelp}`,
     {
       from: from(),
       to: emails(),
@@ -98982,11 +99016,16 @@ function registerIcloudTools(server, ctx2, options = {}) {
       includeSignature
     },
     false,
-    (args) => drafts.createDraft(
-      withSignature(
-        { ...args, from: sender(args.from) },
-        ctx2.settings,
-        ctx2.settings.primaryAddress
+    (args) => withUploads(
+      uploads,
+      args.attachments,
+      uploaded,
+      (attachments2) => drafts.createDraft(
+        withSignature(
+          { ...args, attachments: attachments2, from: sender(args.from) },
+          ctx2.settings,
+          ctx2.settings.primaryAddress
+        )
       )
     )
   );
@@ -99048,7 +99087,7 @@ function registerIcloudTools(server, ctx2, options = {}) {
   );
   tool(
     "update_draft",
-    "Update a managed draft on iCloud. Pass the current revision to detect concurrent edits. Supplied text/HTML body content includes the saved sender signature once unless includeSignature=false. Attachment-only or header-only edits preserve the existing body.",
+    `Update a managed draft on iCloud. Pass the current revision to detect concurrent edits. Supplied text/HTML body content includes the saved sender signature once unless includeSignature=false. Attachment-only or header-only edits preserve the existing body. ${attachmentHelp}`,
     {
       draftId,
       expectedRevision: external_exports.string().min(1),
@@ -99072,7 +99111,15 @@ function registerIcloudTools(server, ctx2, options = {}) {
         if (!current.success || !current.draft) return current;
         signer = addressesIn(current.draft.from)[0] ?? current.draft.from;
       }
-      return drafts.updateDraft(draftId2, withSignature(update, ctx2.settings, signer));
+      return withUploads(
+        uploads,
+        update.attachmentsToAdd,
+        uploaded,
+        (attachmentsToAdd) => drafts.updateDraft(
+          draftId2,
+          withSignature({ ...update, attachmentsToAdd }, ctx2.settings, signer)
+        )
+      );
     }
   );
   tool(

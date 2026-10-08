@@ -84,7 +84,7 @@ export interface ImapDraftCreateInput {
   subject: string;
   body: string;
   htmlBody?: string;
-  attachments?: AttachmentInput[];
+  attachments?: Array<AttachmentInput | MimeDraftAttachment>;
   inReplyTo?: string;
   references?: string[];
 }
@@ -113,7 +113,7 @@ export interface ImapDraftUpdate {
   subject?: string;
   body?: string;
   htmlBody?: string | null;
-  attachmentsToAdd?: AttachmentInput[];
+  attachmentsToAdd?: Array<AttachmentInput | MimeDraftAttachment>;
   attachmentNamesToRemove?: string[];
 }
 
