@@ -31,9 +31,6 @@ function fakeR2() {
       const object = objects.get(key);
       return object ? { ...object, arrayBuffer: async () => object.bytes.slice().buffer } : null;
     },
-    async delete(keys) {
-      for (const key of [keys].flat()) objects.delete(key);
-    },
   };
   return { bucket, objects };
 }
@@ -80,8 +77,13 @@ describe("attachment uploads", () => {
     expect(file.content.equals(Buffer.from(bytes))).toBe(true);
 
     await uploads.delete([ticket.uploadId]);
-    expect(objects.size).toBe(0);
+    expect(objects.get(`uploads/${ticket.uploadId}`)?.bytes.length).toBe(0);
     await expect(uploads.get(ticket.uploadId)).rejects.toThrow(/create_attachment_upload/);
+
+    // Once attached, the link still cannot store a new file under the same uploadId.
+    const reused = await handleUpload(put(ticket.uploadUrl, "replacement"), env);
+    expect(reused.status).toBe(409);
+    await expect(uploads.get(ticket.uploadId)).rejects.toThrow(/not found/);
   });
 
   it("keeps a sent content type but not a form type", async () => {

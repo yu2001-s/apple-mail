@@ -4,8 +4,9 @@
  * create_attachment_upload signs a URL that names the upload, its file name
  * and an expiry; nothing is stored until the file arrives, so the PUT may
  * reach any data center. A conditional put makes each URL single use. The
- * Durable Object reads the file back when a draft attaches it and deletes it
- * afterwards; a lifecycle rule (scripts/setup-worker.mjs) removes leftovers.
+ * Durable Object reads the file back when a draft attaches it and then leaves
+ * an empty marker in its place, so the URL stays used until it expires; a
+ * lifecycle rule (scripts/setup-worker.mjs) removes markers and leftovers.
  */
 import type { UploadedFile, Uploads, UploadTicket } from "../mcp/uploads.js";
 import { UPLOAD_ID_PATTERN } from "../mcp/uploads.js";
@@ -28,7 +29,6 @@ export interface R2 {
     customMetadata?: Record<string, string>;
     arrayBuffer(): Promise<ArrayBuffer>;
   } | null>;
-  delete(keys: string | string[]): Promise<void>;
 }
 
 export interface UploadEnv {
@@ -40,6 +40,8 @@ const LINK_TTL_S = 15 * 60;
 /** How long an uploaded file stays attachable. */
 const KEEP_MS = 24 * 60 * 60 * 1000;
 const PREFIX = "uploads/";
+/** Custom metadata of the empty object left in place of an attached upload. */
+const ATTACHED = { attached: "1" };
 
 function base64url(bytes: ArrayBuffer | Uint8Array): string {
   return Buffer.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toString(
@@ -124,7 +126,11 @@ export function workerUploads(env: UploadEnv, origin: string): Uploads | undefin
 
     async get(uploadId: string): Promise<UploadedFile> {
       const object = UPLOAD_ID_PATTERN.test(uploadId) ? await bucket.get(PREFIX + uploadId) : null;
-      if (!object || object.uploaded.getTime() < Date.now() - KEEP_MS) {
+      if (
+        !object ||
+        object.customMetadata?.attached ||
+        object.uploaded.getTime() < Date.now() - KEEP_MS
+      ) {
         throw new Error(
           `Upload ${uploadId} was not found: it was never uploaded, was already attached, or expired. Create a new one with create_attachment_upload.`
         );
@@ -139,8 +145,17 @@ export function workerUploads(env: UploadEnv, origin: string): Uploads | undefin
       };
     },
 
+    /**
+     * Replaces each file with an empty marker rather than deleting it: while
+     * the key exists the conditional put refuses the link, so it cannot store
+     * a new file under an uploadId that was already attached.
+     */
     async delete(uploadIds: string[]): Promise<void> {
-      if (uploadIds.length) await bucket.delete(uploadIds.map((id) => PREFIX + id));
+      await Promise.all(
+        uploadIds.map((id) =>
+          bucket.put(PREFIX + id, new Uint8Array(), { customMetadata: ATTACHED })
+        )
+      );
     },
   };
 }

@@ -114,10 +114,11 @@ one of two ways:
   `gmail_update_draft`, `gmail_send_message`). The file never passes through
   the conversation. Up to 25 MiB.
 
-Uploads are kept in the R2 bucket named in `wrangler.jsonc` and deleted once a
-draft or message has them. A draft that fails keeps its uploads, so the same
-`uploadId` can be retried. A lifecycle rule set by `setup-worker.mjs` deletes
-anything left after a day.
+Uploads are kept in the R2 bucket named in `wrangler.jsonc`. Once a draft or
+message has one, its file is replaced by an empty marker, so its link cannot
+upload again. A draft that fails keeps its uploads, so the same `uploadId` can
+be retried. A lifecycle rule set by `setup-worker.mjs` deletes anything left,
+markers included, after a day.
 
 ## Security
 
