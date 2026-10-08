@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a problem with apple-mail-mcp
+about: Report a problem with the Mail & Calendar connector
 title: ''
 labels: bug
 assignees: ''
@@ -26,10 +26,9 @@ What actually happened.
 
 ## Environment
 
-- macOS version:
-- Node.js version:
-- apple-mail-mcp version:
-- Claude Desktop version (if applicable):
+- Connector version (package.json):
+- Client (claude.ai, Claude Code, ChatGPT, ...):
+- Service (iCloud, Gmail, Google Calendar):
 
 ## Error Messages
 

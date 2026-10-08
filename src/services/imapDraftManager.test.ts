@@ -1,7 +1,4 @@
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ImapDraftManager,
   SENDING_KEYWORD,
@@ -11,12 +8,6 @@ import type { ImapClientLike, ImapConfig } from "@/services/imapClient.js";
 import type { SendingIdentity } from "@/types.js";
 import { encodeImapId } from "@/services/imapClient.js";
 import { parseDraftMime } from "@/services/mimeDraft.js";
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function identity(): SendingIdentity {
   return {
@@ -127,8 +118,6 @@ function managerOptions(
   client: ImapClientLike,
   overrides: Partial<ImapDraftManagerOptions> = {}
 ): ImapDraftManagerOptions {
-  const dir = mkdtempSync(join(tmpdir(), "apple-mail-imap-drafts-"));
-  tempDirs.push(dir);
   const config: ImapConfig = {
     host: "imap.example.com",
     port: 993,
@@ -139,7 +128,6 @@ function managerOptions(
   };
   const sender = identity();
   return {
-    registryPath: join(dir, "registry.json"),
     resolveIdentity: (selector) =>
       !selector ||
       selector === sender.identityId ||
@@ -595,7 +583,6 @@ describe("in-memory draft cache", () => {
     const fresh = () =>
       new ImapDraftManager(
         managerOptions(fake.client, {
-          registryPath: null,
           smtpSend: vi.fn(async () => ({ success: false, error: "lost", uncertain: true })),
         })
       );

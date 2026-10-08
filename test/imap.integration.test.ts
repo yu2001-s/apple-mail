@@ -9,9 +9,6 @@
  *   RUN_IMAP_IT=1 pnpm test:imap
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { ImapFlow } from "imapflow";
 import { ImapDraftManager, type ImapDraftManagerOptions } from "@/services/imapDraftManager.js";
 import type { SendingIdentity } from "@/types.js";
@@ -236,7 +233,6 @@ run("IMAP drafts shared across devices (GreenMail)", () => {
     };
     const device = () =>
       new ImapDraftManager({
-        registryPath: join(mkdtempSync(join(tmpdir(), "imap-it-device-")), "drafts.json"),
         resolveIdentity: (selector) =>
           !selector || selector === sender.email || selector === sender.identityId ? sender : null,
         imapAccount: () => "greenmail",

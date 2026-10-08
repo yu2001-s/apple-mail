@@ -8,9 +8,6 @@
  * senders), and edited on request. Addresses the user removes are remembered
  * so discovery does not add them back.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-
 export interface Settings {
   version: 1;
   primaryAddress: string;
@@ -239,23 +236,6 @@ export function mergeDiscovered(
     added,
     suggested,
   };
-}
-
-/** Settings kept in a JSON file next to the other local connector data. */
-export class FileSettingsStore implements SettingsStore {
-  constructor(private readonly path: string) {}
-
-  async load(): Promise<Settings | null> {
-    if (!existsSync(this.path)) return null;
-    return parseSettings(JSON.parse(readFileSync(this.path, "utf8")));
-  }
-
-  async save(settings: Settings): Promise<void> {
-    mkdirSync(dirname(this.path), { recursive: true });
-    const tmp = `${this.path}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
-    renameSync(tmp, this.path);
-  }
 }
 
 interface KvLike {

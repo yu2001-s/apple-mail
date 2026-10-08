@@ -106,9 +106,7 @@ export class MailSession {
       // Seeds the KV settings on first use; afterwards settings are edited from chat.
       preferences: JSON.parse(this.env.ICLOUD_MAIL_PREFERENCES ?? "{}") as Preferences,
       settingsStore: kvSettingsStore(this.env.OAUTH_KV),
-      registryPath: null,
       connect: this.imap.connect,
-      fileConfig: false,
     });
     return this.context;
   }
@@ -125,7 +123,7 @@ export class MailSession {
     await icloud?.refresh();
     const server = await createConnectorServer(
       { icloud, google: this.googleAccounts(origin) },
-      { remote: true, websiteUrl: `${origin}/`, uploads: workerUploads(this.env, origin) }
+      { websiteUrl: `${origin}/`, uploads: workerUploads(this.env, origin) }
     );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

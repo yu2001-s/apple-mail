@@ -1,7 +1,4 @@
 import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
-import { homedir } from "os";
-import { dirname, join } from "path";
 import type { AttachmentInput, Draft, SendingIdentity } from "@/types.js";
 import {
   imapAppendRawMessage,
@@ -25,12 +22,7 @@ import {
   prepareDraftMimeForSend,
   type MimeDraftAttachment,
 } from "@/services/mimeDraft.js";
-import {
-  resolveSmtpConfigForIdentity,
-  sendRawViaSmtp,
-  type SmtpConfig,
-  type SmtpSendResult,
-} from "@/services/smtpMailer.js";
+import { sendRawViaSmtp, type SmtpConfig, type SmtpSendResult } from "@/services/smtpMailer.js";
 import { buildReplyOptions, parseOriginalHeaders } from "@/services/replyForward.js";
 import { z } from "zod";
 
@@ -126,31 +118,19 @@ export interface ImapDraftResult {
   sentMessageId?: string;
 }
 
+/**
+ * The draft cache lives in memory for the manager's lifetime: the Drafts
+ * mailbox and its send markers carry everything needed to recover.
+ */
 export interface ImapDraftManagerOptions {
-  /**
-   * Where the draft cache is persisted. `null` keeps it in memory for this
-   * manager's lifetime, which suits a stateless server: the Drafts mailbox
-   * and its send markers carry everything needed to recover.
-   */
-  registryPath?: string | null;
   resolveIdentity: (selector?: string) => SendingIdentity | null;
   imapDeps?: (account: string) => ImapDeps;
   imapAccount?: (identity: SendingIdentity) => string;
-  smtpConfig?: (identity: SendingIdentity) => SmtpConfig;
+  smtpConfig: (identity: SendingIdentity) => SmtpConfig;
   smtpSend?: typeof sendRawViaSmtp;
   sleep?: (ms: number) => Promise<void>;
   /** Configured aliases excluded from reply recipients, or a getter for the current ones. */
   selfAddresses?: string[] | (() => string[]);
-}
-
-function defaultRegistryPath(): string {
-  return join(
-    homedir(),
-    "Library",
-    "Application Support",
-    "apple-mail-mcp",
-    "imap-draft-registry.json"
-  );
 }
 
 function emptyRegistry(): ImapDraftRegistry {
@@ -166,7 +146,6 @@ function draftUuid(draftId: string): string {
 }
 
 export class ImapDraftManager {
-  private readonly registryPath: string | null;
   private memory: ImapDraftRegistry = emptyRegistry();
   private readonly identityResolver: (selector?: string) => SendingIdentity | null;
   private readonly depsForAccount: (account: string) => ImapDeps;
@@ -177,18 +156,10 @@ export class ImapDraftManager {
   private readonly selfAddressList: () => string[];
 
   constructor(options: ImapDraftManagerOptions) {
-    this.registryPath =
-      options.registryPath === undefined ? defaultRegistryPath() : options.registryPath;
     this.identityResolver = options.resolveIdentity;
     this.depsForAccount = options.imapDeps ?? ((account) => ({ account }));
     this.accountForIdentity = options.imapAccount;
-    this.smtpConfigResolver =
-      options.smtpConfig ??
-      ((identity) =>
-        resolveSmtpConfigForIdentity({
-          email: identity.email,
-          account: identity.accountName,
-        }));
+    this.smtpConfigResolver = options.smtpConfig;
     this.smtpSend = options.smtpSend ?? sendRawViaSmtp;
     this.sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     const self = options.selfAddresses ?? [];
@@ -196,21 +167,7 @@ export class ImapDraftManager {
   }
 
   private load(): ImapDraftRegistry {
-    if (this.registryPath === null) return structuredClone(this.memory);
-    if (!existsSync(this.registryPath)) return emptyRegistry();
-    try {
-      const parsed = JSON.parse(readFileSync(this.registryPath, "utf8")) as ImapDraftRegistry;
-      if (parsed.version !== 1 || !parsed.drafts || typeof parsed.drafts !== "object") {
-        throw new Error("unsupported registry format");
-      }
-      return parsed;
-    } catch (error) {
-      throw new Error(
-        `IMAP draft registry is unreadable; no drafts were changed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    }
+    return structuredClone(this.memory);
   }
 
   /** Apply `change` to one cached entry, if it still exists, and persist it. */
@@ -224,17 +181,7 @@ export class ImapDraftManager {
   }
 
   private save(registry: ImapDraftRegistry): void {
-    if (this.registryPath === null) {
-      this.memory = structuredClone(registry);
-      return;
-    }
-    mkdirSync(dirname(this.registryPath), { recursive: true });
-    const tmp = `${this.registryPath}.${process.pid}.tmp`;
-    writeFileSync(tmp, `${JSON.stringify(registry, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    renameSync(tmp, this.registryPath);
+    this.memory = structuredClone(registry);
   }
 
   owns(draftId: string): boolean {

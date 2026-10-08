@@ -1,8 +1,8 @@
 # Cloudflare Worker deployment
 
-Run the connector on Cloudflare instead of your own machine. Add it once to
-your Claude and ChatGPT accounts and it follows you to every device: nothing
-is installed per device and no computer has to stay on.
+The connector runs on Cloudflare. Add it once to your Claude and ChatGPT
+accounts and it follows you to every device: nothing is installed per device
+and no computer has to stay on.
 
 ```text
 Claude / ChatGPT (any device) ──HTTPS──▶ Worker: OAuth + MCP ──TLS──▶ iCloud IMAP / SMTP
@@ -15,8 +15,8 @@ Gmail and Google Calendar accounts are optional; set them up with
 
 ## Deploy
 
-Requires a Cloudflare account. From the repository, on the Mac that already
-has the iCloud configuration:
+Requires a Cloudflare account and, on the Mac you deploy from, the iCloud
+account configuration described below. From the repository:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -45,6 +45,31 @@ in the environment to choose or rotate it. Rotating it does not disconnect
 clients you already approved. Redeploy code changes with
 `npx wrangler deploy`; run the script once more first if the R2 bucket named in
 `wrangler.jsonc` does not exist yet.
+
+### iCloud account configuration
+
+The script reads the account settings from
+`~/Library/Application Support/apple-mail-mcp/config.json` (or the file named
+by `APPLE_MAIL_MCP_CONFIG_FILE`): `APPLE_MAIL_MCP_IMAP_HOST`
+(`imap.mail.me.com`), `APPLE_MAIL_MCP_IMAP_USER`, `APPLE_MAIL_MCP_IMAP_ACCOUNT`,
+`APPLE_MAIL_MCP_SMTP_HOST` (`smtp.mail.me.com`), `APPLE_MAIL_MCP_SMTP_USER`,
+and the sending addresses in `APPLE_MAIL_MCP_SMTP_FROM` and
+`APPLE_MAIL_MCP_SMTP_ALLOWED_FROM`. The Apple app-specific passwords come from
+`APPLE_MAIL_MCP_IMAP_PASSWORD` and `APPLE_MAIL_MCP_SMTP_PASSWORD`, or from the
+Keychain items named by the `*_KEYCHAIN_SERVICE` and `*_KEYCHAIN_ACCOUNT`
+settings:
+
+```sh
+security add-generic-password -s <KEYCHAIN_SERVICE> -a <KEYCHAIN_ACCOUNT> -w
+```
+
+`~/.codex/integrations/icloud-mail/preferences.json` (or the directory in
+`ICLOUD_MAIL_DATA_DIR`) supplies `primaryAddress` and a `signatures` object
+keyed by sender address. It only seeds the settings on first use. Once
+connected, the `health_check` tool verifies IMAP and SMTP authentication
+without sending.
+
+### Worker URL
 
 The Worker URL is `https://icloud-mail.<your-subdomain>.workers.dev`; a custom
 domain can be added in the Cloudflare dashboard. If it answers on more than one
@@ -125,7 +150,7 @@ namespace from the Cloudflare dashboard; each client then has to be approved
 again with the owner password. Leave `google-accounts:v1` in place unless you
 also mean to unlink every Google account.
 
-## How it differs from the local plugin
+## How it works
 
 The Worker checks OAuth and hands each MCP request to one Durable Object
 (`MailSession`), created in eastern North America next to iCloud's IMAP
@@ -138,10 +163,15 @@ even around the clock that stays within the free daily allowance.
 The Worker itself runs next to iCloud too (`placement.host` in
 `wrangler.jsonc`); the `cf-placement` response header shows the data center.
 The first call after an idle period logs in again, which takes about a second;
-later calls only pay the network trip to the Worker. The Worker keeps no draft
-state: drafts are found on iCloud by their ID header and the
-`$IcloudMailSending` keyword marks an unresolved send, exactly as between two
-devices (see [REMOTE.md](REMOTE.md#multiple-devices-and-drafts)).
+later calls only pay the network trip to the Worker.
+
+The Worker keeps no draft state. The iCloud Drafts mailbox is the source of
+truth: each draft carries its connector ID in a header, so the connector finds,
+edits and sends it no matter which client created it. While a send is in
+flight or its outcome is uncertain, the server copy carries the
+`$IcloudMailSending` keyword, and the draft is not sent again until the
+outcome is resolved. Before submitting, the connector also checks Sent for the
+same Message-ID, so a draft whose cleanup failed is never sent twice.
 
 ## Test locally
 

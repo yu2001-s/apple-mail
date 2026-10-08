@@ -1,14 +1,9 @@
 /**
  * Pure helpers that turn an existing message (its raw RFC 5322 source plus the
- * decoded plain-text body) into {@link SmtpSendOptions} for a **threaded reply**
- * or a **forward** sent over SMTP.
- *
- * This is the 2.5.0 "prefer-direct" path: when SMTP is configured we send
- * replies/forwards ourselves with correct `In-Reply-To`/`References` headers and
- * a clean MIME body, instead of driving Mail.app's `reply`/`forward` AppleScript
- * commands (which thread correctly but wrap the injected body in a `blockquote`
- * on macOS 15+). Kept separate from {@link sendViaSmtp} so the addressing,
- * subject-prefix, and quoting rules are unit-testable without a live SMTP server.
+ * decoded plain-text body) into {@link SmtpSendOptions} for a threaded reply,
+ * with correct `In-Reply-To`/`References` headers. Kept separate so the
+ * addressing, subject-prefix and quoting rules are unit-testable without a
+ * mail server.
  */
 import type { SmtpSendOptions } from "@/services/smtpMailer.js";
 
@@ -188,39 +183,4 @@ export function buildReplyOptions(args: {
 function buildAttribution(original: OriginalHeaders): string {
   const who = original.from[0] ?? original.replyTo[0] ?? "the sender";
   return original.date ? `On ${original.date}, ${who} wrote:\n` : `${who} wrote:\n`;
-}
-
-/**
- * Build {@link SmtpSendOptions} for a forward to new recipients. A forward
- * starts a new thread, so no `In-Reply-To`/`References` are set — the win over
- * the AppleScript path is a clean, un-wrapped MIME body.
- */
-export function buildForwardOptions(args: {
-  original: OriginalHeaders;
-  originalPlainText: string;
-  to: string[];
-  body?: string;
-  from?: string;
-}): SmtpSendOptions {
-  const { original, originalPlainText, to, body, from } = args;
-
-  const headerBlock = [
-    "---------- Forwarded message ----------",
-    original.from.length ? `From: ${original.from.join(", ")}` : "",
-    original.date ? `Date: ${original.date}` : "",
-    `Subject: ${original.subject}`,
-    original.to.length ? `To: ${original.to.join(", ")}` : "",
-    original.cc.length ? `Cc: ${original.cc.join(", ")}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  const prefix = body?.trim() ? `${body}\n\n` : "";
-
-  return {
-    to: dedupe(to),
-    subject: withSubjectPrefix(original.subject, "Fwd:"),
-    body: `${prefix}${headerBlock}\n\n${originalPlainText}`,
-    from,
-  };
 }

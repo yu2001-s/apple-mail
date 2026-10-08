@@ -1,6 +1,1 @@
 pnpm exec lint-staged
-# Keep the committed standalone bundle in sync when connector inputs are staged.
-if git diff --cached --name-only | grep -qE '^(src/|package\.json$|pnpm-lock\.yaml$|scripts/package-icloud-plugin\.mjs$)'; then
-  pnpm run build:plugin
-  git add plugins/icloud-mail/server plugins/icloud-mail/LICENSE
-fi

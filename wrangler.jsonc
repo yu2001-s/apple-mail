@@ -8,7 +8,7 @@
   "compatibility_date": "2026-09-15",
   // node:net/node:tls for IMAP and SMTP; strictly public fetches for CIMD documents.
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-  // Kept in step with package.json by scripts/sync-plugin-version.mjs.
+  // Kept in step with package.json by scripts/sync-version.mjs.
   "define": { "CONNECTOR_VERSION": "\"1.6.0\"" },
   "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   // Files uploaded for attachments (create_attachment_upload). setup-worker.mjs

@@ -1,16 +1,11 @@
 import nodemailer from "nodemailer";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
-import { loadFileConfig } from "../services/fileConfig.js";
-import { ImapFlow } from "../services/imapFlow.js";
+import type { ImapFlow } from "../services/imapFlow.js";
 import { resolveImapConfig, decodeImapId, type ImapDeps } from "../services/imapClient.js";
 import { resolveSmtpConfig, sendRawViaSmtp } from "../services/smtpMailer.js";
 import { ImapDraftManager } from "../services/imapDraftManager.js";
 import type { SendingIdentity } from "../types.js";
 import {
   displayNameFor,
-  FileSettingsStore,
   formatSender,
   sameAddress,
   seedSettings,
@@ -23,9 +18,8 @@ export type Preferences = {
   signatures?: Record<string, string>;
 };
 
-/** Everything the tools share, whichever transport serves them. */
+/** Everything the iCloud tools share. */
 export interface ConnectorContext {
-  dataDirectory: string;
   account: string;
   /** The current settings; reload with refresh() before relying on them. */
   settings: Settings;
@@ -44,26 +38,15 @@ export interface ConnectorContext {
 }
 
 export interface ContextOptions {
-  /** Seed preferences supplied directly instead of read from the data directory. */
-  preferences?: Preferences;
-  /** Where settings live. Defaults to settings.json in the data directory. */
-  settingsStore?: SettingsStore;
-  /** Draft cache file; `null` keeps it in memory. Defaults to the data directory. */
-  registryPath?: string | null;
-  /** Supplies IMAP connections, e.g. one reused for a whole request. */
-  connect?: ImapDeps["connect"];
-  /** Read the account configuration file into `env` (local installs). */
-  fileConfig?: boolean;
+  /** Seeds the settings on first use. */
+  preferences: Preferences;
+  /** Where settings live once seeded. */
+  settingsStore: SettingsStore;
+  /** Supplies IMAP connections; the supplier owns their lifetime. */
+  connect: NonNullable<ImapDeps["connect"]>;
 }
 
-export function loadContext(
-  env: NodeJS.ProcessEnv = process.env,
-  options: ContextOptions = {}
-): ConnectorContext {
-  if (options.fileConfig !== false) loadFileConfig(env);
-  const dataDirectory =
-    env.ICLOUD_MAIL_DATA_DIR ||
-    (options.preferences ? "" : join(homedir(), ".codex/integrations/icloud-mail"));
+export function loadContext(env: NodeJS.ProcessEnv, options: ContextOptions): ConnectorContext {
   const account = env.APPLE_MAIL_MCP_IMAP_ACCOUNT || env.APPLE_MAIL_MCP_IMAP_USER;
   if (
     env.APPLE_MAIL_MCP_IMAP_HOST !== "imap.mail.me.com" ||
@@ -72,13 +55,8 @@ export function loadContext(
   ) {
     throw new Error("Expected the existing iCloud IMAP/SMTP configuration.");
   }
-  const preferencesPath = join(dataDirectory, "preferences.json");
-  const preferences: Preferences =
-    options.preferences ??
-    (existsSync(preferencesPath) ? JSON.parse(readFileSync(preferencesPath, "utf8")) : {});
-  const seed = seedSettings(env, preferences);
-  const store =
-    options.settingsStore ?? new FileSettingsStore(join(dataDirectory, "settings.json"));
+  const seed = seedSettings(env, options.preferences);
+  const store = options.settingsStore;
   let settings = seed;
   function senderFor(selector?: string): string | undefined {
     return settings.addresses.find((x) => sameAddress(x, selector ?? settings.primaryAddress));
@@ -110,10 +88,6 @@ export function loadContext(
     })) as typeof nodemailer.createTransport;
   const imapDeps: ImapDeps = { account, connect: options.connect };
   const drafts = new ImapDraftManager({
-    registryPath:
-      options.registryPath === undefined
-        ? join(dataDirectory, "drafts.json")
-        : options.registryPath,
     imapDeps: () => imapDeps,
     resolveIdentity: identity,
     imapAccount: () => account,
@@ -128,32 +102,7 @@ export function loadContext(
   });
   async function withImap<T>(fn: (client: ImapFlow) => Promise<T>): Promise<T> {
     const cfg = resolveImapConfig(env, account);
-    if (options.connect) {
-      // The supplier owns the connection's lifetime.
-      return fn((await options.connect(cfg)) as unknown as ImapFlow);
-    }
-    const client = new ImapFlow({
-      host: cfg.host,
-      port: cfg.port,
-      secure: true,
-      auth: { user: cfg.user, pass: cfg.pass },
-      logger: false,
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 30000,
-    });
-    client.on("error", () => {});
-    try {
-      await client.connect();
-      return await fn(client);
-    } finally {
-      try {
-        await client.logout();
-      } catch {
-        /* The connection may already be closed. */
-      }
-      client.close();
-    }
+    return fn((await options.connect(cfg)) as unknown as ImapFlow);
   }
   function checkId(id: string) {
     const ref = decodeImapId(id);
@@ -171,7 +120,6 @@ export function loadContext(
     return result;
   }
   const ctx: ConnectorContext = {
-    dataDirectory,
     account,
     get settings() {
       return settings;

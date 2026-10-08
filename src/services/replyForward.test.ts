@@ -12,7 +12,6 @@ import {
   withSubjectPrefix,
   quoteBody,
   buildReplyOptions,
-  buildForwardOptions,
 } from "@/services/replyForward.js";
 
 const RAW = [
@@ -146,28 +145,5 @@ describe("buildReplyOptions", () => {
     expect(opts.inReplyTo).toBeUndefined();
     expect(opts.references).toBeUndefined();
     expect(opts.body).toBe("yo");
-  });
-});
-
-describe("buildForwardOptions", () => {
-  const original = parseOriginalHeaders(RAW);
-
-  it("builds a Fwd: message with the forwarded header block and no threading", () => {
-    const opts = buildForwardOptions({
-      original,
-      originalPlainText: "Here is the original body.",
-      to: ["dave@elsewhere.com"],
-      body: "FYI",
-      from: "me@myhost.com",
-    });
-    expect(opts.to).toEqual(["dave@elsewhere.com"]);
-    expect(opts.subject).toBe("Fwd: Project status");
-    expect(opts.inReplyTo).toBeUndefined();
-    expect(opts.references).toBeUndefined();
-    expect(opts.body).toContain("FYI");
-    expect(opts.body).toContain("---------- Forwarded message ----------");
-    expect(opts.body).toContain("From: alice@example.com");
-    expect(opts.body).toContain("Subject: Project status");
-    expect(opts.body).toContain("Here is the original body.");
   });
 });

@@ -1,8 +1,7 @@
 # Contributing
 
-This repository maintains one direct iCloud Mail connector. Its entrypoint is
-`src/icloud/server.ts`; `plugins/icloud-mail/` is the only published plugin.
-Keep tool contracts and server instructions in the MCP. Keep the Skill minimal.
+This repository maintains one connector, the Cloudflare Worker in
+`src/worker/`. Keep tool contracts and server instructions in the MCP server.
 
 Use the pinned pnpm version:
 
@@ -13,19 +12,16 @@ pnpm lint
 pnpm format:check
 pnpm typecheck
 pnpm test
-pnpm build:plugin
+pnpm test:worker
 ```
 
-Never commit account preferences, draft registries, passwords, or Keychain
-contents. The standalone boot test uses synthetic configuration; the live
-verifier reads mail and authenticates without creating drafts or sending.
+Never commit account preferences, passwords, tokens or Keychain contents.
+Personal values are Worker secrets set by `scripts/setup-worker.mjs`; tests use
+synthetic configuration.
 
-For a runtime change, bump `package.json`, run
-`node scripts/sync-plugin-version.mjs`, add a changelog entry, rebuild, and
-commit the new `plugins/icloud-mail/server/` files. A clean build must leave the
-committed bundle unchanged, and the bundle must boot without runtime
-dependencies on Node 20 (`node --test test/plugin-boot.test.mjs`). The
-pre-commit hook rebuilds when connector inputs are staged; commit from a
-checkout without unrelated source edits so they do not enter the bundle.
+For a runtime change, bump `package.json` with
+`pnpm version patch --no-git-tag-version` (it also updates the version in
+`wrangler.jsonc`), add a changelog entry, and deploy with
+`npx wrangler deploy`.
 
 GreenMail integration tests run with `RUN_IMAP_IT=1 pnpm test:imap`.

@@ -1,14 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   addressesIn,
   applyDisplayName,
   applySettingsUpdate,
   applySignature,
   displayNameFor,
-  FileSettingsStore,
   formatSender,
   kvSettingsStore,
   mergeDiscovered,
@@ -29,11 +25,6 @@ function base(): Settings {
     signatures: { "me@icloud.com": "Me" },
   });
 }
-
-const dirs: string[] = [];
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("connector settings", () => {
   it("seeds from the account configuration and keeps the configured primary", () => {
@@ -114,16 +105,7 @@ describe("connector settings", () => {
     expect(() => parseSettings(null)).toThrow();
   });
 
-  it("persists to a private file and to KV", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "icloud-settings-"));
-    dirs.push(dir);
-    const file = new FileSettingsStore(join(dir, "settings.json"));
-    expect(await file.load()).toBeNull();
-    await file.save(base());
-    expect(await file.load()).toEqual(base());
-    expect(statSync(join(dir, "settings.json")).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(join(dir, "settings.json"), "utf8")).version).toBe(1);
-
+  it("persists to KV", async () => {
     const data = new Map<string, string>();
     const kv = kvSettingsStore({
       get: async (key) => data.get(key) ?? null,

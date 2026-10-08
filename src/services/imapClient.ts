@@ -1,29 +1,18 @@
 /**
- * IMAP backend (issue #43).
+ * IMAP access to iCloud mail: search, read, flag, move and the raw message
+ * operations behind drafts, keyed by the composite `imap:` id the read path
+ * emits (see encodeImapId/decodeImapId below).
  *
- * AppleScript-over-Mail.app is the default. When an account is explicitly
- * configured for IMAP (env below), operations route here instead:
- *   - read:    search-messages / list-messages (server-side SEARCH, orders of
- *              magnitude faster and correct on large Gmail mailboxes where
- *              AppleScript times out with a false-empty) and get-message;
- *   - folders: create / rename / delete-mailbox (work on the server hierarchy
- *              that AppleScript can't touch — #42);
- *   - message: mark/flag/move/delete, keyed by the composite `imap:` id the
- *              read path emits (see encodeImapId/decodeImapId below).
- * Everything is opt-in and additive; un-configured accounts use AppleScript.
- *
- * Opt-in via env (mirrors the SMTP transport pattern):
- *   APPLE_MAIL_MCP_IMAP_USER      (required — enables IMAP; the login address)
- *   APPLE_MAIL_MCP_IMAP_ACCOUNT   (Mail account name to match for routing; default = USER)
+ * Configured from the environment:
+ *   APPLE_MAIL_MCP_IMAP_USER      (required; the login address)
+ *   APPLE_MAIL_MCP_IMAP_ACCOUNT   (account label used in ids; default = USER)
  *   APPLE_MAIL_MCP_IMAP_HOST      (default imap.gmail.com)
  *   APPLE_MAIL_MCP_IMAP_PORT      (default 993, implicit TLS)
- *   APPLE_MAIL_MCP_IMAP_PASSWORD  (else Keychain via the two vars below)
- *   APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE / _KEYCHAIN_ACCOUNT
+ *   APPLE_MAIL_MCP_IMAP_PASSWORD  (an app-specific password)
  *
  * @module services/imapClient
  */
 import { ImapFlow } from "@/services/imapFlow.js";
-import { readKeychainPassword } from "@/services/smtpMailer.js";
 import { SETUP_HINT } from "@/utils/docsUrls.js";
 import { extractHtmlBody, extractTextBody } from "@/utils/mimeParse.js";
 import type { MessageResource } from "@/types.js";
@@ -34,10 +23,8 @@ export const IMAP_ENV = {
   host: "APPLE_MAIL_MCP_IMAP_HOST",
   port: "APPLE_MAIL_MCP_IMAP_PORT",
   password: "APPLE_MAIL_MCP_IMAP_PASSWORD",
-  keychainService: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_SERVICE",
-  keychainAccount: "APPLE_MAIL_MCP_IMAP_KEYCHAIN_ACCOUNT",
-  // C2 multi-account: JSON array of additional accounts, e.g.
-  // [{"account":"Work","user":"me@co.com","host":"imap.co.com","keychainService":"imap.co.com"}]
+  // JSON array of additional accounts, e.g.
+  // [{"account":"Work","user":"me@co.com","host":"imap.co.com","password":"..."}]
   accounts: "APPLE_MAIL_MCP_IMAP_ACCOUNTS",
 } as const;
 
@@ -203,7 +190,7 @@ function sameImapAccount(left: string, right: string, deps: ImapDeps): boolean {
   if (left === right) return true;
 
   // Injected configs are the normal test seam and also give us both aliases
-  // without consulting process.env or the Keychain.
+  // without consulting process.env.
   if (deps.config) {
     const aliases = new Set([deps.config.accountLabel, deps.config.user]);
     if (aliases.has(left) && aliases.has(right)) return true;
@@ -231,18 +218,13 @@ function depsForMessageRef(ref: ImapMessageRef, deps: ImapDeps): ImapDeps {
   return depsForAccount(ref.account, deps);
 }
 
-/**
- * A configured IMAP account *without* its password resolved — cheap to
- * enumerate (no Keychain access), used for routing/listing (C2).
- */
+/** A configured IMAP account, used for routing ids to their account. */
 interface ImapAccountSpec {
   accountLabel: string;
   user: string;
   host: string;
   port: number;
   password?: string;
-  keychainService?: string;
-  keychainAccount?: string;
 }
 
 function str(v: unknown): string | undefined {
@@ -251,8 +233,8 @@ function str(v: unknown): string | undefined {
 
 /**
  * Enumerate all configured IMAP accounts (C2): the legacy single-account env
- * vars plus any in the `APPLE_MAIL_MCP_IMAP_ACCOUNTS` JSON array. Does not
- * resolve passwords. The legacy account takes precedence on label collisions.
+ * vars plus any in the `APPLE_MAIL_MCP_IMAP_ACCOUNTS` JSON array. The legacy
+ * account takes precedence on label collisions.
  */
 function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccountSpec[] {
   const specs: ImapAccountSpec[] = [];
@@ -264,8 +246,6 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
       host: env[IMAP_ENV.host]?.trim() || "imap.gmail.com",
       port: env[IMAP_ENV.port] ? Number.parseInt(env[IMAP_ENV.port] as string, 10) : 993,
       password: env[IMAP_ENV.password],
-      keychainService: env[IMAP_ENV.keychainService]?.trim(),
-      keychainAccount: env[IMAP_ENV.keychainAccount]?.trim(),
     });
   }
   const json = env[IMAP_ENV.accounts]?.trim();
@@ -286,8 +266,6 @@ function listImapAccountSpecs(env: NodeJS.ProcessEnv = process.env): ImapAccount
             host: str(a.host) || "imap.gmail.com",
             port,
             password: str(a.password),
-            keychainService: str(a.keychainService),
-            keychainAccount: str(a.keychainAccount),
           });
         }
       }
@@ -302,15 +280,9 @@ function specToConfig(spec: ImapAccountSpec): ImapConfig {
   if (!Number.isInteger(spec.port) || spec.port <= 0) {
     throw new Error(`Invalid IMAP port for account "${spec.accountLabel}": "${spec.port}".`);
   }
-  let pass = spec.password;
-  if (!pass && spec.keychainService) {
-    pass =
-      readKeychainPassword(spec.keychainService, spec.keychainAccount || spec.user) ?? undefined;
-  }
+  const pass = spec.password;
   if (!pass) {
-    throw new Error(
-      `No IMAP password for account "${spec.accountLabel}". Set a password or a Keychain service/account.`
-    );
+    throw new Error(`No IMAP password for account "${spec.accountLabel}". ${SETUP_HINT}`);
   }
   return {
     host: spec.host,
@@ -329,50 +301,6 @@ export function isImapAccount(
 ): boolean {
   if (!account) return false;
   return listImapAccountSpecs(env).some((s) => s.accountLabel === account || s.user === account);
-}
-
-/**
- * Read-side routing gate (v2.6.0 — prefer-IMAP reads). Returns true when a read
- * tool should go to IMAP rather than AppleScript:
- *   - IMAP is configured at all, AND
- *   - either the caller named no account (→ merge across all accounts), or the
- *     named account is itself a configured IMAP account.
- * An explicitly-named NON-IMAP account returns false → AppleScript. When IMAP is
- * not configured at all this is always false, so behavior is unchanged.
- *
- * NOTE: the 3 mailbox-WRITE ops (create/delete/rename-mailbox) deliberately keep
- * using `isImapAccount` — they only route to IMAP for an explicitly-named IMAP
- * account, never on an omitted account.
- */
-export function shouldUseImap(
-  account: string | undefined,
-  env: NodeJS.ProcessEnv = process.env
-): boolean {
-  return (
-    listImapAccountSpecs(env).length > 0 && (account === undefined || isImapAccount(account, env))
-  );
-}
-
-/** Account labels of every configured IMAP account (C2), for diagnostics. */
-export function listImapAccountLabels(env: NodeJS.ProcessEnv = process.env): string[] {
-  return listImapAccountSpecs(env).map((s) => s.accountLabel);
-}
-
-/**
- * Resolve full configs (passwords included) for every configured IMAP account
- * (C2/B5). Accounts whose password can't be resolved are skipped (logged), so a
- * single misconfigured account doesn't take down the rest (e.g. IDLE watchers).
- */
-export function resolveImapConfigs(env: NodeJS.ProcessEnv = process.env): ImapConfig[] {
-  const out: ImapConfig[] = [];
-  for (const spec of listImapAccountSpecs(env)) {
-    try {
-      out.push(specToConfig(spec));
-    } catch (e) {
-      console.error(`Skipping IMAP account "${spec.accountLabel}": ${String(e)}`);
-    }
-  }
-  return out;
 }
 
 /**
@@ -815,38 +743,6 @@ async function acquirePooled(cfg: ImapConfig): Promise<ImapClientLike> {
     return await p;
   } finally {
     connecting.delete(key);
-  }
-}
-
-/**
- * Health probe for the setup doctor (C3): reports whether IMAP is configured and,
- * if so, whether a connection + NOOP succeeds (auth/network/Keychain all good).
- */
-export async function imapHealthCheck(
-  deps: ImapDeps = {}
-): Promise<{ configured: boolean; ok: boolean; account?: string; host?: string; error?: string }> {
-  if (!deps.config && !process.env[IMAP_ENV.user]?.trim()) {
-    return { configured: false, ok: false };
-  }
-  let cfg: ImapConfig;
-  try {
-    cfg = deps.config ?? resolveImapConfig(process.env, deps.account);
-  } catch (e) {
-    return { configured: true, ok: false, error: errText(e) };
-  }
-  try {
-    await useClient(deps, async (client) => {
-      await client.noop();
-    });
-    return { configured: true, ok: true, account: cfg.accountLabel, host: cfg.host };
-  } catch (e) {
-    return {
-      configured: true,
-      ok: false,
-      account: cfg.accountLabel,
-      host: cfg.host,
-      error: errText(e),
-    };
   }
 }
 

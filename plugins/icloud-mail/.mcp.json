@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "icloud-mail": {
-      "command": "/bin/sh",
-      "args": ["./server/launch.sh"],
-      "cwd": "."
-    }
-  }
-}

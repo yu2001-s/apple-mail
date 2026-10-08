@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   IMAP_ENV,
   isImapAccount,
-  shouldUseImap,
   resolveImapConfig,
   resolveMailboxPath,
   imapSearchMessages,
@@ -30,7 +29,6 @@ import {
   imapBatchMarkRead,
   imapBatchMove,
   imapThread,
-  listImapAccountLabels,
   __setPoolConnect,
   __resetPool,
   dropAllPools,
@@ -160,29 +158,6 @@ describe("isImapAccount", () => {
   });
 });
 
-describe("shouldUseImap (v2.6.0 prefer-IMAP read gate)", () => {
-  const env = { [IMAP_ENV.user]: "rob@example.com", [IMAP_ENV.account]: "Work" };
-
-  it("is false when IMAP is not configured (behavior unchanged → AppleScript)", () => {
-    expect(shouldUseImap(undefined, {})).toBe(false);
-    expect(shouldUseImap("anything", {})).toBe(false);
-  });
-
-  it("is true with no account when IMAP IS configured (→ merge across accounts)", () => {
-    expect(shouldUseImap(undefined, env)).toBe(true);
-  });
-
-  it("is true for an explicitly-named configured IMAP account (label or user)", () => {
-    expect(shouldUseImap("Work", env)).toBe(true);
-    expect(shouldUseImap("rob@example.com", env)).toBe(true);
-  });
-
-  it("is FALSE for an explicitly-named NON-IMAP account (→ AppleScript)", () => {
-    expect(shouldUseImap("Exchange-Work", env)).toBe(false);
-    expect(shouldUseImap("someone@else.com", env)).toBe(false);
-  });
-});
-
 describe("resolveImapConfig", () => {
   it("throws when user is missing", () => {
     expect(() => resolveImapConfig({})).toThrow(/IMAP not configured/);
@@ -214,10 +189,6 @@ describe("multi-account IMAP (C2)", () => {
     ]),
   };
 
-  it("lists all configured account labels (legacy + JSON array)", () => {
-    expect(listImapAccountLabels(multiEnv)).toEqual(["Personal", "Work"]);
-  });
-
   it("isImapAccount matches any configured account by label or user", () => {
     expect(isImapAccount("Personal", multiEnv)).toBe(true);
     expect(isImapAccount("me@work.com", multiEnv)).toBe(true);
@@ -243,7 +214,8 @@ describe("multi-account IMAP (C2)", () => {
       [IMAP_ENV.password]: "p",
       [IMAP_ENV.accounts]: "{not json",
     };
-    expect(listImapAccountLabels(env)).toEqual(["a@b.com"]);
+    expect(resolveImapConfig(env).accountLabel).toBe("a@b.com");
+    expect(isImapAccount("a@b.com", env)).toBe(true);
   });
 });
 

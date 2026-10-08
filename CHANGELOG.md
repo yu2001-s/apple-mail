@@ -2,6 +2,14 @@
 
 ## 1.6.0 — 2026-10-08
 
+- The Cloudflare Worker is now the only way to run the connector. The local
+  stdio plugin for Claude Code and Codex (`plugins/icloud-mail/`), the
+  self-hosted HTTP server (`--http`, `deploy/`, docs/REMOTE.md) and their
+  install, packaging and verification scripts are removed, along with the code
+  only they used: Keychain lookups, the local config-file loader, file-backed
+  settings and draft caches, attachments by file path, and leftover
+  AppleScript-era types and helpers. `scripts/setup-worker.mjs` still reads
+  the same local configuration to set the Worker's secrets.
 - Serve Gmail and Google Calendar for any number of Google accounts from the
   Worker, on the same connector URL. Accounts are linked and removed at
   `/accounts` behind the owner password; refresh tokens are stored in KV

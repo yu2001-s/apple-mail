@@ -1,6 +1,4 @@
 import { createHash } from "crypto";
-import { existsSync } from "fs";
-import { isAbsolute } from "path";
 import nodemailer from "nodemailer";
 import type { Attachment, AttachmentInput } from "@/types.js";
 import { decodeInlineAttachment } from "@/utils/attachmentLimits.js";
@@ -107,11 +105,6 @@ export function splitAddresses(value: string | null): string[] {
 }
 
 function nodemailerAttachment(input: AttachmentInput | MimeDraftAttachment) {
-  if (typeof input === "string") {
-    if (!isAbsolute(input)) throw new Error(`Attachment path must be absolute: "${input}"`);
-    if (!existsSync(input)) throw new Error(`Attachment file not found: "${input}"`);
-    return { path: input };
-  }
   if ("contentBase64" in input) {
     return {
       filename: input.filename,
